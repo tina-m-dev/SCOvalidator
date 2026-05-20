@@ -287,7 +287,40 @@ with st.sidebar:
     file = st.file_uploader("Transaction CSV", type="csv")
     master_file = st.file_uploader("Optional store master CSV", type="csv")
     st.header("Model parameters")
-    high_pressure = st.number_input("High-pressure threshold: tickets / 30 min", 10, 80, 30)
+    with st.expander("Service-time assumptions", expanded=True):
+        fixed_sec = st.number_input(
+            "Fixed seconds per ticket",
+            min_value=0.0, max_value=180.0, value=23.0, step=1.0,
+            help="Greeting, payment, receipt and short customer interaction."
+        )
+        item_sec = st.number_input(
+            "Scan seconds per item",
+            min_value=0.0, max_value=30.0, value=3.0, step=0.5,
+            help="Item scanning / handling time."
+        )
+        return_alpha = st.number_input(
+            "Return item effort factor α",
+            min_value=0.0, max_value=2.0, value=0.50, step=0.05,
+            help="Returns stay staff-only. α scales returned-item effort vs normal scan effort."
+        )
+
+    with st.expander("High-pressure threshold", expanded=True):
+        threshold_mode = st.radio("Threshold mode", ["Manual", "Derived from service capacity"], index=0)
+        capacity_basket = st.number_input(
+            "Basket size for derived capacity",
+            min_value=1.0, max_value=20.0, value=2.7, step=0.1,
+            help="Observed peak basket was around 2.7 items/ticket."
+        )
+        practical_utilization = st.number_input(
+            "Practical utilization threshold",
+            min_value=0.10, max_value=1.00, value=0.55, step=0.05,
+            help="Queue is treated as visible before 100% cashier utilization."
+        )
+        derived_hp = int(round(practical_utilization * 1800 / max(fixed_sec + item_sec * capacity_basket, 1e-6)))
+        default_hp = derived_hp if threshold_mode == "Derived from service capacity" else 30
+        high_pressure = st.number_input("High-pressure threshold: tickets / 30 min", 5, 120, int(default_hp))
+        st.caption(f"Derived threshold with current assumptions: {derived_hp} tickets / 30 min")
+
     rollout_basket = st.number_input("Small-basket threshold for rollout", 1.0, 10.0, 4.0, 0.5)
     pilot_basket = st.number_input("Small-basket threshold for pilot", 1.0, 12.0, 5.0, 0.5)
     with st.expander("Advanced thresholds"):
@@ -311,7 +344,7 @@ if file is None:
 
 try:
     raw_df = load_data(file)
-    df = enrich(raw_df, 23.0, 3.0, 0.50, pilot_basket)
+    df = enrich(raw_df, fixed_sec, item_sec, return_alpha, pilot_basket)
 except Exception as e:
     st.error(str(e)); st.stop()
 
@@ -422,7 +455,7 @@ with tab6:
         redeploy = st.number_input("Redeployment realization", 0.0, 1.0, value=0.50, step=0.05)
     scenario = core.copy()
     items = scenario["sb_rollout_items_per_ticket"].fillna(scenario["hp_items_per_ticket"]).fillna(3.0)
-    sec_per_ticket = 23 + 3*items
+    sec_per_ticket = fixed_sec + item_sec*items
     scenario["annual_congestion_value_eur"] = scenario["sb_peak_rollout_intervals"] * high_pressure * abandon * basket_value * margin
     scenario["released_checkout_hours_proxy"] = scenario["sb_peak_rollout_intervals"] * high_pressure * sec_per_ticket / 3600
     scenario["annual_labor_value_eur"] = scenario["released_checkout_hours_proxy"] * labor * redeploy
@@ -435,3 +468,24 @@ with tab6:
     dl(core, "Download core recommendations", "sco_core_recommendations.csv")
     dl(monthly, "Download monthly profiles", "sco_monthly_profiles.csv")
     dl(timep, "Download time-of-day profiles", "sco_time_profiles.csv")
+    assumptions = pd.DataFrame([
+        ["fixed_sec_per_ticket", fixed_sec],
+        ["scan_sec_per_item", item_sec],
+        ["return_item_effort_alpha", return_alpha],
+        ["high_pressure_tickets_per_30_min", high_pressure],
+        ["derived_high_pressure_threshold", derived_hp],
+        ["capacity_basket_items", capacity_basket],
+        ["practical_utilization", practical_utilization],
+        ["small_basket_rollout", rollout_basket],
+        ["small_basket_pilot", pilot_basket],
+        ["rollout_min_intervals", rollout_intervals],
+        ["rollout_min_peaks_per_100_open_hh", rollout_per100],
+        ["rollout_min_day_share", rollout_day_share],
+        ["pilot_min_intervals", pilot_intervals],
+        ["pilot_min_peaks_per_100_open_hh", pilot_per100],
+        ["pilot_min_day_share", pilot_day_share],
+        ["true_dual_hp_share_limit", true_dual_limit],
+        ["return_low_threshold", return_low],
+        ["return_risk_threshold", return_risk],
+    ], columns=["parameter", "value"])
+    dl(assumptions, "Download model assumptions", "sco_model_assumptions.csv")
