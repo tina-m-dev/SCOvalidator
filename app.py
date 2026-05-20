@@ -44,8 +44,8 @@ st.markdown(
 
 st.title("A Payback-Based Framework for SCO Deployment Decisions")
 st.caption(
-    "Classifies each store into rollout, pilot / validate, or defer using K1 peak concentration, "
-    "K4 small-basket suitability, K2 POS-configuration logic, data-quality safeguards, and payback scenarios."
+    "Classifies each store into rollout, pilot / validate, or defer using peak concentration, "
+    "small-basket suitability, POS-configuration logic, data-quality safeguards, and payback scenarios."
 )
 
 # =============================================================================
@@ -78,8 +78,10 @@ class Params:
     # pressure thresholds
     early_pressure_tickets: int
     capacity_breach_tickets: int
+    threshold_basket_items: float
+    capacity_breach_utilization: float
 
-    # basket fit / K4
+    # basket fit / small-basket suitability
     basket_rollout: float
     basket_pilot: float
     min_clean_basket_coverage: float
@@ -107,7 +109,7 @@ class Params:
     netting_ticket_share_medium: float
     netting_ticket_share_high: float
 
-    # multi-POS / K2
+    # multi-POS / POS capacity logic
     multi_pos_second_min_tickets: int
     multi_pos_second_min_share: float
     multi_pos_min_total_tickets: int
@@ -118,6 +120,47 @@ class Params:
     # existing-SCO adoption flags
     adoption_low_share: float
     adoption_min_basket_gap: float
+
+
+
+PARAM_DESCRIPTIONS = {
+    "fixed_sec": "Fixed checkout time per ticket in seconds: greeting, payment, receipt, and short customer interaction. It affects estimated POS workload and derived capacity.",
+    "scan_sec": "Average scan/handling time per item in seconds. It increases service time for larger baskets and affects capacity calculations.",
+    "return_alpha": "Multiplier for returned-item handling effort compared with normal item scanning. Returns create staffed POS workload but do not increase SCO-suitable demand.",
+    "early_pressure_tickets": "Half-hour ticket threshold used as an early queue-pressure signal. This is not full capacity breach; it identifies intervals worth testing for SCO fit.",
+    "capacity_breach_tickets": "Half-hour ticket threshold for practical capacity risk. It can be derived from service time assumptions and utilization.",
+    "threshold_basket_items": "Basket size used only to derive the practical capacity-breach threshold from service time assumptions.",
+    "capacity_breach_utilization": "Utilization level used to derive capacity breach. Example: 0.80 means the threshold is set at 80% of theoretical 30-minute POS capacity.",
+    "basket_rollout": "Maximum clean items per ticket for a peak interval to be treated as rollout-grade small-basket pressure.",
+    "basket_pilot": "Maximum clean items per ticket for a peak interval to be treated as pilot-grade small-basket pressure.",
+    "min_clean_basket_coverage": "Minimum share of tickets in a block that must come from clean basket rows before the block is allowed to influence basket suitability.",
+    "rollout_intervals": "Minimum number of rollout-grade small-basket peak intervals required for a strong rollout signal.",
+    "rollout_per100": "Minimum normalized rollout-grade peak intensity: qualifying peak intervals per 100 observed open half-hours.",
+    "rollout_day_share": "Minimum share of baseline operating days with at least one rollout-grade small-basket peak interval.",
+    "pilot_intervals": "Minimum number of pilot-grade small-basket peak intervals required for a pilot / validate signal.",
+    "pilot_per100": "Minimum normalized pilot-grade peak intensity: qualifying peak intervals per 100 observed open half-hours.",
+    "pilot_day_share": "Minimum share of baseline operating days with at least one pilot-grade small-basket peak interval.",
+    "consistency_min_months": "Minimum number of months that must show recurring pressure before the model treats the pattern as stable.",
+    "consistency_month_day_share": "Monthly threshold for the share of days with qualifying peak pressure. Used in the consistency test.",
+    "consistency_month_per100": "Monthly normalized pressure threshold: qualifying peak intervals per 100 observed open half-hours. Used in the consistency test.",
+    "seasonal_top2_share": "Threshold for detecting concentrated seasonality. If the top two months carry this share of annual pressure, the store is flagged as seasonal rather than automatically rejected.",
+    "seasonal_min_per100": "Minimum normalized pressure intensity required for a seasonal pattern to be considered materially relevant.",
+    "return_low": "Return-share level considered low. Stores below this level are less likely to have pressure contaminated by staff-only return workload.",
+    "return_risk": "Return-share level considered risky. Above this threshold, pressure may be driven by staff-only workload rather than SCO-suitable demand.",
+    "netting_ticket_share_medium": "Medium-risk threshold for tickets in rows where items are lower than tickets, indicating possible sales/return netting.",
+    "netting_ticket_share_high": "High-risk threshold for tickets in potentially netted rows. High netting risk lowers confidence and can cap the recommendation.",
+    "multi_pos_second_min_tickets": "Minimum ticket count for the second-strongest POS terminal to be considered materially active in a half-hour.",
+    "multi_pos_second_min_share": "Minimum share of total POS tickets that the second-strongest POS must carry to count as meaningful parallel usage.",
+    "multi_pos_min_total_tickets": "Minimum total POS tickets in a half-hour before multi-POS usage is considered operationally meaningful.",
+    "multi_pos_share_limit": "Share of pressure intervals with true multi-POS usage above which additional staffed POS capacity may be structurally required.",
+    "staffed_necessity_large_basket_share": "Large-basket share threshold inside true multi-POS pressure intervals. If exceeded, the extra staffed POS is more likely structurally necessary.",
+    "multi_pos_uncertain_basket_share_limit": "Maximum tolerated share of uncertain basket intervals in multi-POS analysis. Above this, POS-capacity conclusions require field validation.",
+    "adoption_low_share": "Existing-SCO benchmark flag: SCO ticket share below this value is treated as low adoption and requires diagnosis.",
+    "adoption_min_basket_gap": "Existing-SCO benchmark flag: minimum expected basket-size gap between POS and SCO. A small gap suggests weak mission separation.",
+}
+
+def param_help(name: str) -> str:
+    return PARAM_DESCRIPTIONS.get(name, "")
 
 
 def pct(x: float | int | None) -> str:
@@ -134,12 +177,44 @@ def fmt(x: float | int | None, d: int = 1) -> str:
     return f"{x:,.{d}f}"
 
 
-def normalize_bool_series(s: pd.Series) -> pd.Series:
+
+def parse_bool_strict(s: pd.Series, column_name: str = "IS_SELF_CHECKOUT") -> pd.Series:
+    """Parse a boolean column strictly. Invalid values are fatal because SCO/POS split drives the model."""
     if s.dtype == bool:
-        return s
-    if pd.api.types.is_numeric_dtype(s):
         return s.astype(bool)
-    return s.astype(str).str.lower().isin(["true", "1", "yes", "y", "da"])
+
+    true_values = {"true", "1", "yes", "y", "da"}
+    false_values = {"false", "0", "no", "n", "ne"}
+
+    raw = s.astype("string").str.strip().str.lower()
+    parsed = pd.Series(pd.NA, index=s.index, dtype="boolean")
+    parsed.loc[raw.isin(true_values)] = True
+    parsed.loc[raw.isin(false_values)] = False
+
+    invalid = parsed.isna()
+    if invalid.any():
+        examples = s.loc[invalid].drop_duplicates().head(10).tolist()
+        raise ValueError(
+            f"{column_name} must contain only true/false values "
+            f"(accepted: true/false, 1/0, yes/no, da/ne). "
+            f"Invalid rows: {int(invalid.sum())}. Examples: {examples}"
+        )
+
+    return parsed.astype(bool)
+
+
+def assert_integer_like(series: pd.Series, column_name: str) -> pd.Series:
+    numeric = pd.to_numeric(series, errors="coerce")
+    if numeric.isna().any():
+        examples = series.loc[numeric.isna()].drop_duplicates().head(10).tolist()
+        raise ValueError(f"{column_name} contains non-numeric or missing values. Examples: {examples}")
+
+    non_integer = (numeric % 1 != 0)
+    if non_integer.any():
+        examples = series.loc[non_integer].drop_duplicates().head(10).tolist()
+        raise ValueError(f"{column_name} must be integer-like. Invalid examples: {examples}")
+
+    return numeric.astype(int)
 
 
 @st.cache_data(show_spinner=False)
@@ -149,22 +224,124 @@ def load_transaction_csv(uploaded_file) -> pd.DataFrame:
     if missing:
         raise ValueError(f"CSV is missing required columns: {sorted(missing)}")
 
-    df["TIME_BLOCK"] = pd.to_datetime(df["TIME_BLOCK"], errors="coerce")
-    if df["TIME_BLOCK"].isna().any():
-        raise ValueError("TIME_BLOCK contains invalid timestamps.")
+    # Timestamp is a hard gate: if a timestamp cannot be parsed, baseline filtering and seasonality are unreliable.
+    parsed_time = pd.to_datetime(df["TIME_BLOCK"], errors="coerce")
+    if parsed_time.isna().any():
+        examples = df.loc[parsed_time.isna(), "TIME_BLOCK"].drop_duplicates().head(10).tolist()
+        raise ValueError(f"TIME_BLOCK contains invalid timestamps. Invalid rows: {int(parsed_time.isna().sum())}. Examples: {examples}")
+    df["TIME_BLOCK"] = parsed_time
 
-    df["STORE_ID"] = pd.to_numeric(df["STORE_ID"], errors="coerce").astype("Int64")
-    df["POS"] = pd.to_numeric(df["POS"], errors="coerce").astype("Int64")
-    df["NUMBER_OF_TICKETS"] = pd.to_numeric(df["NUMBER_OF_TICKETS"], errors="coerce")
-    df["NUMBER_OF_ITEMS"] = pd.to_numeric(df["NUMBER_OF_ITEMS"], errors="coerce")
-    df["IS_SELF_CHECKOUT"] = normalize_bool_series(df["IS_SELF_CHECKOUT"])
+    # Strict boolean parsing. Do not silently coerce random values into True.
+    df["IS_SELF_CHECKOUT"] = parse_bool_strict(df["IS_SELF_CHECKOUT"])
 
-    if df[["STORE_ID", "POS", "NUMBER_OF_TICKETS", "NUMBER_OF_ITEMS"]].isna().any().any():
-        raise ValueError("Some required numeric columns contain missing or invalid values.")
+    # Core identifiers.
+    df["STORE_ID"] = assert_integer_like(df["STORE_ID"], "STORE_ID")
+    df["POS"] = assert_integer_like(df["POS"], "POS")
 
-    df["STORE_ID"] = df["STORE_ID"].astype(int)
-    df["POS"] = df["POS"].astype(int)
+    if (df["STORE_ID"] <= 0).any():
+        examples = df.loc[df["STORE_ID"] <= 0, "STORE_ID"].drop_duplicates().head(10).tolist()
+        raise ValueError(f"STORE_ID must be positive. Invalid examples: {examples}")
+
+    if (df["POS"] <= 0).any():
+        examples = df.loc[df["POS"] <= 0, "POS"].drop_duplicates().head(10).tolist()
+        raise ValueError(f"POS must be a positive integer terminal identifier. Invalid examples: {examples}")
+
+    # Transaction fields.
+    df["NUMBER_OF_TICKETS"] = assert_integer_like(df["NUMBER_OF_TICKETS"], "NUMBER_OF_TICKETS")
+    df["NUMBER_OF_ITEMS"] = assert_integer_like(df["NUMBER_OF_ITEMS"], "NUMBER_OF_ITEMS")
+
+    if (df["NUMBER_OF_TICKETS"] < 0).any():
+        examples = df.loc[df["NUMBER_OF_TICKETS"] < 0, "NUMBER_OF_TICKETS"].drop_duplicates().head(10).tolist()
+        raise ValueError(f"NUMBER_OF_TICKETS must be >= 0. Invalid examples: {examples}")
+
+    # Same STORE_ID + POS terminal cannot switch between staffed POS and SCO.
+    # If it does, POS mapping is unreliable and the model should not guess.
+    type_counts = df.groupby(["STORE_ID", "POS"])["IS_SELF_CHECKOUT"].nunique()
+    conflicts = type_counts[type_counts > 1]
+    if len(conflicts) > 0:
+        examples = conflicts.reset_index()[["STORE_ID", "POS"]].head(10).to_dict("records")
+        raise ValueError(
+            "A STORE_ID + POS terminal appears both as staffed POS and SCO. "
+            "Fix the terminal mapping before running the model. "
+            f"Conflicting examples: {examples}"
+        )
+
     return df
+
+
+def input_validation_summary(df: pd.DataFrame) -> pd.DataFrame:
+    """Soft validation after hard schema gates have passed."""
+    rows = []
+
+    duplicate_full_rows = int(df.duplicated().sum())
+    duplicate_key_rows = int(df.duplicated(subset=["STORE_ID", "POS", "IS_SELF_CHECKOUT", "TIME_BLOCK"], keep=False).sum())
+    zero_ticket_rows = int((df["NUMBER_OF_TICKETS"] == 0).sum())
+    negative_item_rows = int((df["NUMBER_OF_ITEMS"] < 0).sum())
+    zero_item_positive_ticket_rows = int(((df["NUMBER_OF_ITEMS"] == 0) & (df["NUMBER_OF_TICKETS"] > 0)).sum())
+    possible_netting_rows = int((df["NUMBER_OF_ITEMS"] < df["NUMBER_OF_TICKETS"]).sum())
+
+    rows.extend([
+        {"check": "Required columns present", "status": "Pass", "details": ", ".join(sorted(REQUIRED_COLUMNS))},
+        {"check": "IS_SELF_CHECKOUT format", "status": "Pass", "details": "Strict true/false parsing passed"},
+        {"check": "TIME_BLOCK format", "status": "Pass", "details": "All timestamps parsed successfully"},
+        {"check": "NUMBER_OF_TICKETS", "status": "Pass", "details": "Integer-like and non-negative"},
+        {"check": "POS terminal IDs", "status": "Pass", "details": "Positive integer IDs; same STORE_ID+POS does not switch checkout type"},
+        {
+            "check": "Duplicate key rows",
+            "status": "Review" if duplicate_key_rows else "Pass",
+            "details": f"{duplicate_key_rows:,} rows share STORE_ID + POS + IS_SELF_CHECKOUT + TIME_BLOCK"
+        },
+        {
+            "check": "Zero-ticket rows",
+            "status": "Review" if zero_ticket_rows else "Pass",
+            "details": f"{zero_ticket_rows:,} rows with NUMBER_OF_TICKETS = 0"
+        },
+        {
+            "check": "Negative item rows",
+            "status": "Review" if negative_item_rows else "Pass",
+            "details": f"{negative_item_rows:,} rows treated as return/correction workload"
+        },
+        {
+            "check": "Potential netting rows",
+            "status": "Review" if possible_netting_rows else "Pass",
+            "details": f"{possible_netting_rows:,} rows where NUMBER_OF_ITEMS < NUMBER_OF_TICKETS; excluded from basket scoring"
+        },
+        {
+            "check": "Zero-item positive-ticket rows",
+            "status": "Review" if zero_item_positive_ticket_rows else "Pass",
+            "details": f"{zero_item_positive_ticket_rows:,} rows; possible correction/netting signal"
+        },
+    ])
+
+    # Store-level POS sanity checks.
+    pos_summary = df.groupby(["STORE_ID", "IS_SELF_CHECKOUT"])["POS"].nunique().unstack(fill_value=0)
+    if True not in pos_summary.columns:
+        pos_summary[True] = 0
+    if False not in pos_summary.columns:
+        pos_summary[False] = 0
+    stores_without_staffed_pos = pos_summary[pos_summary[False] == 0].index.tolist()
+    stores_with_many_staffed_pos = pos_summary[pos_summary[False] > 4].index.tolist()
+    stores_with_many_sco = pos_summary[pos_summary[True] > 4].index.tolist()
+
+    rows.extend([
+        {
+            "check": "At least one staffed POS per store",
+            "status": "Review" if stores_without_staffed_pos else "Pass",
+            "details": f"{len(stores_without_staffed_pos)} stores without staffed POS. Examples: {stores_without_staffed_pos[:10]}"
+        },
+        {
+            "check": "Unusually many staffed POS terminals",
+            "status": "Review" if stores_with_many_staffed_pos else "Pass",
+            "details": f"{len(stores_with_many_staffed_pos)} stores with >4 staffed POS. Examples: {stores_with_many_staffed_pos[:10]}"
+        },
+        {
+            "check": "Unusually many SCO terminals",
+            "status": "Review" if stores_with_many_sco else "Pass",
+            "details": f"{len(stores_with_many_sco)} stores with >4 SCO terminals. Examples: {stores_with_many_sco[:10]}"
+        },
+    ])
+
+    return pd.DataFrame(rows)
 
 
 def load_optional_master(uploaded_file) -> Optional[pd.DataFrame]:
@@ -190,93 +367,67 @@ def load_optional_master(uploaded_file) -> Optional[pd.DataFrame]:
 
 with st.sidebar:
     st.header("1) Upload data")
-    csv_file = st.file_uploader("Transaction CSV", type=["csv"])
-    master_file = st.file_uploader("Optional store master CSV", type=["csv"])
+    csv_file = st.file_uploader(
+        "Transaction CSV",
+        type=["csv"],
+        help="Required input with STORE_ID, POS, IS_SELF_CHECKOUT, TIME_BLOCK, NUMBER_OF_TICKETS, and NUMBER_OF_ITEMS.",
+    )
+    master_file = st.file_uploader(
+        "Optional store master CSV",
+        type=["csv"],
+        help="Optional metadata by STORE_ID, such as urban/tourist flag, floor constraints, or retail-media potential. It does not override the blind transaction-based score.",
+    )
 
     st.header("2) Service-time assumptions")
-    fixed_sec = st.number_input("Fixed seconds per ticket", 0.0, 180.0, 23.0, 1.0)
-    scan_sec = st.number_input("Scan seconds per item", 0.0, 30.0, 3.0, 0.5)
-    return_alpha = st.number_input(
-        "Return item effort factor α",
-        0.0,
-        2.0,
-        0.50,
-        0.05,
-        help="Returns/corrections consume staff time, but are not SCO-addressable demand.",
-    )
+    fixed_sec = st.number_input("Fixed seconds per ticket", 0.0, 180.0, 23.0, 1.0, help=param_help("fixed_sec"))
+    scan_sec = st.number_input("Scan seconds per item", 0.0, 30.0, 3.0, 0.5, help=param_help("scan_sec"))
+    return_alpha = st.number_input("Return item effort factor α", 0.0, 2.0, 0.50, 0.05, help=param_help("return_alpha"))
 
     st.header("3) Pressure thresholds")
-    threshold_basket = st.number_input(
-        "Basket size for capacity derivation",
-        1.0,
-        20.0,
-        2.7,
-        0.1,
-        help="Default 2.7 comes from observed peak POS basket size.",
-    )
-    practical_util = st.number_input("Capacity-breach utilization", 0.10, 1.00, 0.80, 0.05)
+    threshold_basket = st.number_input("Basket size for capacity derivation", 1.0, 20.0, 2.7, 0.1, help=param_help("threshold_basket_items"))
+    practical_util = st.number_input("Capacity-breach utilization", 0.10, 1.00, 0.80, 0.05, help=param_help("capacity_breach_utilization"))
     derived_capacity = int(round(practical_util * 1800 / max(fixed_sec + scan_sec * threshold_basket, 1e-6)))
-    early_pressure = st.number_input(
-        "Early pressure tickets / 30 min",
-        5,
-        120,
-        30,
-        1,
-        help="Not a full capacity breach. This is an early queue-pressure signal.",
-    )
-    capacity_breach = st.number_input(
-        "Capacity-breach tickets / 30 min",
-        5,
-        140,
-        derived_capacity,
-        1,
-        help="Derived from service-time assumptions and practical utilization.",
-    )
+
+    early_pressure = st.number_input("Early pressure tickets / 30 min", 5, 120, 30, 1, help=param_help("early_pressure_tickets"))
+    capacity_breach = st.number_input("Capacity-breach tickets / 30 min", 5, 140, derived_capacity, 1, help=param_help("capacity_breach_tickets"))
     st.caption(f"Derived capacity-breach threshold: {derived_capacity} tickets / 30 min")
 
-    st.header("4) Basket fit / K4")
-    basket_rollout = st.number_input("Max items/ticket for rollout-grade peak", 1.0, 15.0, 4.0, 0.5)
-    basket_pilot = st.number_input("Max items/ticket for pilot-grade peak", 1.0, 20.0, 5.0, 0.5)
-    clean_coverage = st.number_input(
-        "Min clean basket-ticket coverage",
-        0.0,
-        1.0,
-        0.70,
-        0.05,
-        help="K4 excludes anomalous rows where ITEMS < TICKETS. This parameter requires enough clean ticket coverage inside a block.",
-    )
+    st.header("4) Basket fit / small-basket suitability")
+    basket_rollout = st.number_input("Max items/ticket for rollout-grade peak", 1.0, 15.0, 4.0, 0.5, help=param_help("basket_rollout"))
+    basket_pilot = st.number_input("Max items/ticket for pilot-grade peak", 1.0, 20.0, 5.0, 0.5, help=param_help("basket_pilot"))
+    clean_coverage = st.number_input("Min clean basket-ticket coverage", 0.0, 1.0, 0.70, 0.05, help=param_help("min_clean_basket_coverage"))
 
     with st.expander("5) Rollout / pilot thresholds", expanded=False):
-        rollout_intervals = st.number_input("Rollout: min small-basket peak intervals", 1, 5000, 100, 10)
-        rollout_per100 = st.number_input("Rollout: min peaks per 100 open half-hours", 0.0, 50.0, 3.0, 0.5)
-        rollout_day_share = st.number_input("Rollout: min share of days with peak", 0.0, 1.0, 0.45, 0.05)
-        pilot_intervals = st.number_input("Pilot: min small-basket peak intervals", 1, 5000, 50, 10)
-        pilot_per100 = st.number_input("Pilot: min peaks per 100 open half-hours", 0.0, 50.0, 1.5, 0.5)
-        pilot_day_share = st.number_input("Pilot: min share of days with peak", 0.0, 1.0, 0.20, 0.05)
+        rollout_intervals = st.number_input("Rollout: min small-basket peak intervals", 1, 5000, 100, 10, help=param_help("rollout_intervals"))
+        rollout_per100 = st.number_input("Rollout: min peaks per 100 open half-hours", 0.0, 50.0, 3.0, 0.5, help=param_help("rollout_per100"))
+        rollout_day_share = st.number_input("Rollout: min share of days with peak", 0.0, 1.0, 0.45, 0.05, help=param_help("rollout_day_share"))
+        pilot_intervals = st.number_input("Pilot: min small-basket peak intervals", 1, 5000, 50, 10, help=param_help("pilot_intervals"))
+        pilot_per100 = st.number_input("Pilot: min peaks per 100 open half-hours", 0.0, 50.0, 1.5, 0.5, help=param_help("pilot_per100"))
+        pilot_day_share = st.number_input("Pilot: min share of days with peak", 0.0, 1.0, 0.20, 0.05, help=param_help("pilot_day_share"))
 
     with st.expander("6) Consistency / seasonality", expanded=False):
-        consistency_min_months = st.number_input("Min recurring months", 1, 12, 4, 1)
-        consistency_month_day_share = st.number_input("Monthly day-share threshold", 0.0, 1.0, 0.50, 0.05)
-        consistency_month_per100 = st.number_input("Monthly peaks / 100 open HH threshold", 0.0, 50.0, 3.0, 0.5)
-        seasonal_top2 = st.number_input("Seasonal case: top-2-month peak share", 0.0, 1.0, 0.50, 0.05)
-        seasonal_min_per100 = st.number_input("Seasonal case: min peaks / 100 open HH", 0.0, 50.0, 2.0, 0.5)
+        consistency_min_months = st.number_input("Min recurring months", 1, 12, 4, 1, help=param_help("consistency_min_months"))
+        consistency_month_day_share = st.number_input("Monthly day-share threshold", 0.0, 1.0, 0.50, 0.05, help=param_help("consistency_month_day_share"))
+        consistency_month_per100 = st.number_input("Monthly peaks / 100 open HH threshold", 0.0, 50.0, 3.0, 0.5, help=param_help("consistency_month_per100"))
+        seasonal_top2 = st.number_input("Seasonal case: top-2-month peak share", 0.0, 1.0, 0.50, 0.05, help=param_help("seasonal_top2_share"))
+        seasonal_min_per100 = st.number_input("Seasonal case: min peaks / 100 open HH", 0.0, 50.0, 2.0, 0.5, help=param_help("seasonal_min_per100"))
 
     with st.expander("7) Returns, netting risk, and multi-POS logic", expanded=True):
-        return_low = st.number_input("Low return-share threshold", 0.0, 0.10, 0.005, 0.001, format="%.3f")
-        return_risk = st.number_input("Return-risk threshold", 0.0, 0.20, 0.02, 0.005, format="%.3f")
-        netting_medium = st.number_input("Medium netting-risk ticket share", 0.0, 1.0, 0.02, 0.005, format="%.3f")
-        netting_high = st.number_input("High netting-risk ticket share", 0.0, 1.0, 0.10, 0.01, format="%.3f")
+        return_low = st.number_input("Low return-share threshold", 0.0, 0.10, 0.005, 0.001, format="%.3f", help=param_help("return_low"))
+        return_risk = st.number_input("Return-risk threshold", 0.0, 0.20, 0.02, 0.005, format="%.3f", help=param_help("return_risk"))
+        netting_medium = st.number_input("Medium netting-risk ticket share", 0.0, 1.0, 0.02, 0.005, format="%.3f", help=param_help("netting_ticket_share_medium"))
+        netting_high = st.number_input("High netting-risk ticket share", 0.0, 1.0, 0.10, 0.01, format="%.3f", help=param_help("netting_ticket_share_high"))
 
-        second_min_tickets = st.number_input("Multi-POS: second-strongest POS min tickets", 1, 80, 5, 1)
-        second_min_share = st.number_input("Multi-POS: second-strongest POS min share", 0.0, 1.0, 0.30, 0.05)
-        multi_min_total = st.number_input("Multi-POS: min total POS tickets", 1, 150, 20, 1)
-        multi_share_limit = st.number_input("Multi-POS structural-use share threshold", 0.0, 1.0, 0.40, 0.05)
-        large_basket_share = st.number_input("Staffed-necessity: large-basket share threshold", 0.0, 1.0, 0.50, 0.05)
-        uncertain_basket_limit = st.number_input("Multi-POS uncertain basket-share limit", 0.0, 1.0, 0.30, 0.05)
+        second_min_tickets = st.number_input("Multi-POS: second-strongest POS min tickets", 1, 80, 5, 1, help=param_help("multi_pos_second_min_tickets"))
+        second_min_share = st.number_input("Multi-POS: second-strongest POS min share", 0.0, 1.0, 0.30, 0.05, help=param_help("multi_pos_second_min_share"))
+        multi_min_total = st.number_input("Multi-POS: min total POS tickets", 1, 150, 20, 1, help=param_help("multi_pos_min_total_tickets"))
+        multi_share_limit = st.number_input("Multi-POS structural-use share threshold", 0.0, 1.0, 0.40, 0.05, help=param_help("multi_pos_share_limit"))
+        large_basket_share = st.number_input("Staffed-necessity: large-basket share threshold", 0.0, 1.0, 0.50, 0.05, help=param_help("staffed_necessity_large_basket_share"))
+        uncertain_basket_limit = st.number_input("Multi-POS uncertain basket-share limit", 0.0, 1.0, 0.30, 0.05, help=param_help("multi_pos_uncertain_basket_share_limit"))
 
     with st.expander("8) Existing-SCO adoption flags", expanded=False):
-        adoption_low_share = st.number_input("Low SCO adoption share flag", 0.0, 1.0, 0.12, 0.01)
-        adoption_gap = st.number_input("Weak basket separation flag", 0.0, 5.0, 0.50, 0.10)
+        adoption_low_share = st.number_input("Low SCO adoption share flag", 0.0, 1.0, 0.12, 0.01, help=param_help("adoption_low_share"))
+        adoption_gap = st.number_input("Weak basket separation flag", 0.0, 5.0, 0.50, 0.10, help=param_help("adoption_min_basket_gap"))
 
 params = Params(
     fixed_sec=float(fixed_sec),
@@ -284,6 +435,8 @@ params = Params(
     return_alpha=float(return_alpha),
     early_pressure_tickets=int(early_pressure),
     capacity_breach_tickets=int(capacity_breach),
+    threshold_basket_items=float(threshold_basket),
+    capacity_breach_utilization=float(practical_util),
     basket_rollout=float(basket_rollout),
     basket_pilot=float(basket_pilot),
     min_clean_basket_coverage=float(clean_coverage),
@@ -317,7 +470,7 @@ if csv_file is None:
         """
         <div class="decision-box">
         <b>Upload the Kodiraona transaction CSV to run the decision engine.</b><br>
-        The app will produce rollout / pilot / defer recommendations, K2 multi-POS intervention logic,
+        The app will produce rollout / pilot / defer recommendations, POS capacity logic multi-POS intervention logic,
         existing-SCO adoption benchmarks, data-quality diagnostics, monthly profiles, and downloadable CSV outputs.
         </div>
         """,
@@ -326,9 +479,9 @@ if csv_file is None:
     st.subheader("Core safeguards")
     st.markdown(
         """
-        - **K1 is traffic pressure:** tickets remain in the pressure count even when item counts are suspicious.
-        - **K4 is conservative:** rows where `NUMBER_OF_ITEMS < NUMBER_OF_TICKETS` are excluded from basket-size scoring.
-        - **K2 is hierarchical:** additional POS capacity is first tested for structural necessity; SCO replacement is recommended only if K1×K4 exists.
+        - **peak concentration is traffic pressure:** tickets remain in the pressure count even when item counts are suspicious.
+        - **small-basket suitability is conservative:** rows where `NUMBER_OF_ITEMS < NUMBER_OF_TICKETS` are excluded from basket-size scoring.
+        - **POS capacity logic is hierarchical:** additional POS capacity is first tested for structural necessity; SCO replacement is recommended only if SCO-suitable peak pressure exists.
         - **Returns are staff-only workload:** they can create POS work but cannot increase SCO suitability.
         """
     )
@@ -358,7 +511,7 @@ def enrich(df: pd.DataFrame, p: Params) -> pd.DataFrame:
     out["positive_tickets"] = np.where(out["is_return"], 0, out["NUMBER_OF_TICKETS"])
     out["return_tickets"] = np.where(out["is_return"], out["NUMBER_OF_TICKETS"], 0)
 
-    # K4 clean components: suspicious netted rows are not allowed to make baskets look smaller.
+    # small-basket suitability clean components: suspicious netted rows are not allowed to make baskets look smaller.
     out["clean_basket_tickets"] = np.where(out["clean_basket_row"], out["NUMBER_OF_TICKETS"], 0)
     out["clean_basket_items"] = np.where(out["clean_basket_row"], out["NUMBER_OF_ITEMS"], 0)
 
@@ -484,7 +637,7 @@ def aggregate_pos_halfhours(df: pd.DataFrame, mask: pd.Series, p: Params, period
 
     hh = hh.merge(pos_use, on=["STORE_ID", "TIME_BLOCK"], how="left")
 
-    # K1 uses tickets. K4 uses clean basket rows only.
+    # peak concentration uses tickets. small-basket suitability uses clean basket rows only.
     hh["net_items_per_ticket"] = hh["pos_items"] / hh["positive_pos_tickets"].replace(0, np.nan)
     hh["clean_items_per_ticket"] = hh["clean_basket_items"] / hh["clean_basket_tickets"].replace(0, np.nan)
     hh["clean_basket_ticket_coverage"] = hh["clean_basket_tickets"] / hh["pos_tickets"].replace(0, np.nan)
@@ -692,7 +845,7 @@ def classify(row: pd.Series, p: Params) -> Tuple[int, str, str, str, str]:
     k2_uncertain = (not pd.isna(row["uncertain_basket_share_in_true_multi_hp"])) and (row["uncertain_basket_share_in_true_multi_hp"] >= p.multi_pos_uncertain_basket_share_limit)
 
     if row["pos_count"] == 1:
-        k2_action = "Add SCO if K1×K4 and payback pass"
+        k2_action = "Add SCO if SCO-suitable peak pressure and payback pass"
         operational_fit = True
         reasons.append("single POS; no multi-POS redundancy question")
     elif multi_pos and structurally_required:
@@ -758,7 +911,7 @@ def add_decisions(metrics: pd.DataFrame, p: Params) -> pd.DataFrame:
     out["recommended_action"] = [x[1] for x in decisions]
     out["rationale"] = [x[2] for x in decisions]
     out["score_logic"] = [x[3] for x in decisions]
-    out["k2_intervention_logic"] = [x[4] for x in decisions]
+    out["pos_capacity_intervention_logic"] = [x[4] for x in decisions]
     return out
 
 
@@ -889,6 +1042,7 @@ except Exception as exc:
     st.error(str(exc))
     st.stop()
 
+input_checks = input_validation_summary(raw_df)
 master = load_optional_master(master_file)
 df = enrich(raw_df, params)
 quality_core = store_data_quality(df, df["core_baseline"], params)
@@ -921,7 +1075,7 @@ tabs = st.tabs([
     "Executive answer",
     "Recommendation engine",
     "Data quality",
-    "K2 POS logic",
+    "POS capacity logic",
     "Store deep dive",
     "Existing SCO adoption",
     "Saturday / seasonality",
@@ -940,10 +1094,10 @@ with tabs[0]:
     st.markdown(
         """
         <div class="method-box">
-        <b>Decision lens:</b> K1 uses ticket pressure; K4 uses conservative basket suitability.
+        <b>Decision lens:</b> peak concentration uses ticket pressure; small-basket suitability uses conservative basket suitability.
         Rows where <code>NUMBER_OF_ITEMS &lt; NUMBER_OF_TICKETS</code> are treated as possible netting/correction risk:
-        they remain in K1 traffic pressure but are excluded from K4 basket scoring.
-        K2 then decides whether additional staffed POS capacity should be kept, replaced, or repurposed.
+        they remain in peak concentration traffic pressure but are excluded from small-basket suitability basket scoring.
+        POS capacity logic then decides whether additional staffed POS capacity should be kept, replaced, or repurposed.
         </div>
         """,
         unsafe_allow_html=True,
@@ -1004,7 +1158,7 @@ with tabs[1]:
     ].copy()
 
     display_cols = [
-        "STORE_ID", "decision_score", "recommended_action", "k2_intervention_logic", "rationale",
+        "STORE_ID", "decision_score", "recommended_action", "pos_capacity_intervention_logic", "rationale",
         "pos_count", "has_sco", "days", "observed_open_halfhours", "pos_tickets", "tickets_per_open_hh",
         "median_daily_peak", "early_pressure_intervals", "capacity_breach_intervals",
         "sb_peak_rollout_intervals", "sb_peak_rollout_per100_open_hh", "sb_peak_rollout_day_share",
@@ -1016,14 +1170,27 @@ with tabs[1]:
     download_df_button(view, "Download filtered recommendation table", "sco_recommendations_filtered.csv")
 
 with tabs[2]:
-    st.subheader("Data quality and netting-risk safeguards")
+    st.subheader("Data quality and input validation")
     st.markdown(
         """
         <div class="method-box">
-        The dataset is aggregated at half-hour × POS level, so sales and returns/corrections may be netted in the same row.
-        K1 pressure remains valid because tickets stay positive. K4 basket suitability is protected by excluding rows where
-        <code>NUMBER_OF_ITEMS &lt; NUMBER_OF_TICKETS</code> from basket-size scoring and requiring clean ticket coverage in qualifying blocks.
+        The app applies hard format gates before scoring: SCO flag must be true/false, timestamps must parse,
+        tickets must be non-negative integers, POS terminal IDs must be positive integers, and a terminal cannot switch
+        between staffed POS and SCO within the same store. After that, netting/correction risks are flagged rather than silently deleted.
         </div>
+        """,
+        unsafe_allow_html=True,
+    )
+
+    st.markdown("#### Input format checks")
+    st.dataframe(input_checks, use_container_width=True, hide_index=True)
+
+    st.markdown("#### Netting-risk safeguards")
+    st.markdown(
+        """
+        The dataset is aggregated at half-hour × POS level, so sales and returns/corrections may be netted in the same row.
+        Peak concentration remains valid because tickets are non-negative. Small-basket suitability is protected by excluding rows where
+        <code>NUMBER_OF_ITEMS &lt; NUMBER_OF_TICKETS</code> from basket-size scoring and requiring clean ticket coverage in qualifying blocks.
         """,
         unsafe_allow_html=True,
     )
@@ -1039,23 +1206,24 @@ with tabs[2]:
 
     st.dataframe(quality_core.sort_values(["data_quality_confidence", "possible_netting_ticket_share"], ascending=[True, False]), use_container_width=True, hide_index=True)
     download_df_button(quality_core, "Download data quality table", "sco_data_quality_core.csv")
+    download_df_button(input_checks, "Download input validation checks", "sco_input_validation_checks.csv")
 
 with tabs[3]:
-    st.subheader("K2 POS-configuration logic")
+    st.subheader("POS-configuration logic")
     st.markdown(
         """
         <div class="method-box">
-        <b>K2 hierarchy:</b><br>
+        <b>Additional POS hierarchy:</b><br>
         1) First test whether additional staffed POS capacity is structurally required.<br>
-        2) If not structurally required and K1×K4 exists, replace redundant POS with SCO/hybrid.<br>
-        3) If not structurally required and K1×K4 does not exist, remove or repurpose the space, but do not call it an SCO case.<br>
+        2) If not structurally required and SCO-suitable peak pressure exists, replace redundant POS with SCO/hybrid.<br>
+        3) If not structurally required and SCO-suitable peak pressure does not exist, remove or repurpose the space, but do not call it an SCO case.<br>
         4) If structurally required, keep the staffed POS; pilot SCO only as add-on if space exists.
         </div>
         """,
         unsafe_allow_html=True,
     )
     k2_cols = [
-        "STORE_ID", "pos_count", "has_sco", "k2_intervention_logic", "recommended_action",
+        "STORE_ID", "pos_count", "has_sco", "pos_capacity_intervention_logic", "recommended_action",
         "early_pressure_intervals", "capacity_breach_intervals", "sb_peak_rollout_intervals",
         "true_multi_share_hp", "large_basket_share_in_true_multi_hp", "uncertain_basket_share_in_true_multi_hp",
         "structurally_required_staffed_pos", "data_quality_confidence", "rationale",
@@ -1065,7 +1233,7 @@ with tabs[3]:
         st.info("No stores with 2+ POS found.")
     else:
         st.dataframe(k2_view, use_container_width=True, hide_index=True)
-        download_df_button(k2_view, "Download K2 POS logic table", "sco_k2_pos_logic.csv")
+        download_df_button(k2_view, "Download POS capacity logic table", "sco_k2_pos_logic.csv")
 
 with tabs[4]:
     st.subheader("Store deep dive")
@@ -1078,7 +1246,7 @@ with tabs[4]:
         f"""
         <div class="decision-box">
         <b>Store {selected_store}: {row['recommended_action']} · Score {int(row['decision_score'])}</b><br>
-        <b>K2:</b> {row['k2_intervention_logic']}<br>
+        <b>POS capacity logic:</b> {row['pos_capacity_intervention_logic']}<br>
         <b>Data quality:</b> {row['data_quality_confidence']} — {row['data_quality_flags']}<br>
         {row['rationale']}
         </div>
@@ -1161,7 +1329,7 @@ with tabs[6]:
         show_cols = [
             "STORE_ID", "pos_count", "has_sco", "observed_open_halfhours", "pos_tickets",
             "sb_peak_rollout_intervals", "sb_peak_rollout_per100_open_hh", "sb_peak_rollout_day_share",
-            "sb_rollout_median_items_per_ticket", "k2_intervention_logic", "data_quality_confidence",
+            "sb_rollout_median_items_per_ticket", "pos_capacity_intervention_logic", "data_quality_confidence",
         ]
         st.dataframe(sat_metrics_dec[[c for c in show_cols if c in sat_metrics_dec.columns]], use_container_width=True, hide_index=True)
         download_df_button(sat_metrics_dec, "Download Saturday module metrics", "sco_saturday_module_metrics.csv")
@@ -1171,15 +1339,15 @@ with tabs[7]:
     st.caption("Scenario only: the dataset does not contain CAPEX, margin, basket value, labor cost, or observed abandonment.")
     col1, col2, col3 = st.columns(3)
     with col1:
-        investment = st.number_input("Initial SCO investment (€)", min_value=0.0, value=9000.0, step=500.0)
-        fixed_cost = st.number_input("Annual maintenance/support (€)", min_value=0.0, value=1200.0, step=100.0)
+        investment = st.number_input("Initial SCO investment (€)", min_value=0.0, value=9000.0, step=500.0, help="Initial capital cost of one SCO deployment: hardware, setup, integration, and layout work. Used only in the scenario calculator.")
+        fixed_cost = st.number_input("Annual maintenance/support (€)", min_value=0.0, value=1200.0, step=100.0, help="Annual fixed cost for support, maintenance, service and similar recurring SCO costs. Used only in the scenario calculator.")
     with col2:
-        avg_basket_value = st.number_input("Average ticket value (€)", min_value=0.0, value=7.5, step=0.5)
-        gross_margin = st.number_input("Gross margin", min_value=0.0, max_value=1.0, value=0.25, step=0.01)
+        avg_basket_value = st.number_input("Average ticket value (€)", min_value=0.0, value=7.5, step=0.5, help="Average basket value in euros. Used to translate avoided lost tickets into gross-margin contribution.")
+        gross_margin = st.number_input("Gross margin", min_value=0.0, max_value=1.0, value=0.25, step=0.01, help="Gross margin rate used to convert protected revenue into contribution. Example: 0.25 means 25%.")
     with col3:
-        abandonment = st.number_input("Avoided lost-ticket factor", min_value=0.0, max_value=1.0, value=0.03, step=0.01)
-        labor_cost = st.number_input("Fully loaded labor cost €/hour", min_value=0.0, value=8.5, step=0.5)
-        redeployment = st.number_input("Labor redeployment realization", min_value=0.0, max_value=1.0, value=0.50, step=0.05)
+        abandonment = st.number_input("Avoided lost-ticket factor", min_value=0.0, max_value=1.0, value=0.03, step=0.01, help="Scenario assumption for the share of peak tickets at risk of abandonment or leakage that SCO could help protect.")
+        labor_cost = st.number_input("Fully loaded labor cost €/hour", min_value=0.0, value=8.5, step=0.5, help="Hourly cost of labor including employer costs. Used to value released checkout time.")
+        redeployment = st.number_input("Labor redeployment realization", min_value=0.0, max_value=1.0, value=0.50, step=0.05, help="Share of released checkout time that can realistically create value elsewhere in the store.")
 
     scenario = core_metrics.copy()
     avg_peak_items = scenario["sb_rollout_median_items_per_ticket"].fillna(scenario["hp_median_clean_items_per_ticket"]).fillna(2.7)
@@ -1214,6 +1382,8 @@ with tabs[8]:
     st.subheader("Assumptions and exports")
     assumptions_df = pd.DataFrame([params.__dict__]).T.reset_index()
     assumptions_df.columns = ["parameter", "value"]
+    assumptions_df["description"] = assumptions_df["parameter"].map(PARAM_DESCRIPTIONS).fillna("")
+    assumptions_df = assumptions_df[["parameter", "value", "description"]]
     st.dataframe(assumptions_df, use_container_width=True, hide_index=True)
     download_df_button(assumptions_df, "Download assumptions", "sco_assumptions.csv")
 
