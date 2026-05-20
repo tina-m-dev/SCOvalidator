@@ -2,28 +2,25 @@
 
 Streamlit app for the Kodiraona / Studenac SCO case.
 
-It classifies stores into:
+## What it does
 
-- **2 = Rollout / optimize**
-- **1 = Pilot / validate**
-- **0 = Defer / diagnose**
+- Uploads the transaction CSV.
+- Excludes Sundays and Croatian public holidays from the core baseline.
+- Analyzes Saturdays as a separate module.
+- Normalizes pressure by observed open half-hours.
+- Separates K1 peak concentration from K4 small-basket suitability.
+- Handles netting risk: rows where `NUMBER_OF_ITEMS < NUMBER_OF_TICKETS` are excluded from K4 basket-size scoring, but not from K1 traffic pressure.
+- Treats negative items as return/correction workload: staff-only, not SCO-addressable.
+- Applies hierarchical K2 logic for 2+ POS stores:
+  1. Test whether additional staffed POS capacity is structurally required.
+  2. If not required and K1×K4 exists, replace redundant POS with SCO / hybrid.
+  3. If not required and K1×K4 does not exist, remove or repurpose space, but do not call it an SCO case.
+  4. If required, keep staffed POS; only pilot add-on SCO if space exists.
+- Benchmarks stores that already have SCO.
+- Provides a payback scenario calculator.
+- Exports recommendation, diagnostics, assumptions, data quality, and half-hour details.
 
-The app is built around the case insight that SCO should be evaluated by **recurring, normalized, SCO-addressable small-basket peak pressure**, not by total transaction volume alone.
-
-## What the app does
-
-1. Uploads the transaction CSV.
-2. Excludes Sundays and Croatian public holidays from the core baseline.
-3. Keeps Saturdays as a separate module.
-4. Normalizes pressure by observed open half-hours.
-5. Separates total POS workload from SCO-addressable small-basket workload.
-6. Treats returns as staff-only workload.
-7. Applies a true dual-POS safeguard.
-8. Benchmarks stores that already have SCO.
-9. Provides a scenario-based payback calculator.
-10. Exports recommendation and diagnostic CSV files.
-
-## Required columns
+## Required CSV columns
 
 ```text
 STORE_ID
@@ -41,17 +38,13 @@ pip install -r requirements.txt
 streamlit run app.py
 ```
 
-## Run online
+## Deploy online
 
-Recommended: Streamlit Community Cloud.
+Upload these files to GitHub and deploy on Streamlit Community Cloud:
 
-1. Create a GitHub repository.
-2. Upload `app.py` and `requirements.txt`.
-3. Deploy it on Streamlit Community Cloud.
-4. Upload the transaction CSV in the app UI.
+- `app.py`
+- `requirements.txt`
+- `README.md`
+- `store_master_template.csv`
 
-## Notes
-
-The app does not infer urbanity or store format from transactions. If you have store master data, upload it as an optional second CSV with `STORE_ID` and additional fields.
-
-Financial payback is parameterized because the supplied dataset does not include CAPEX, margin, labor cost, basket value, or observed queue abandonment.
+Do not upload the competition CSV to GitHub. Upload it inside the app.
