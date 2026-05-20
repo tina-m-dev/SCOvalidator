@@ -1,0 +1,3 @@
+STORE_ID,format_type,urban_flag,tourist_flag,selling_area_m2,floor_space_constraint,retail_media_potential
+1,urban,1,0,110,medium,medium
+2,tourist,0,1,95,high,high
