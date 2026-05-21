@@ -77,9 +77,8 @@ class Params:
 
     # pressure thresholds
     early_pressure_tickets: int
-    capacity_breach_tickets: int
-    threshold_basket_items: float
     capacity_breach_utilization: float
+    capacity_estimation_top_n: int
 
     # basket fit / small-basket suitability
     basket_rollout: float
@@ -128,9 +127,8 @@ PARAM_DESCRIPTIONS = {
     "scan_sec": "Average scan/handling time per item in seconds. It increases service time for larger baskets and affects capacity calculations.",
     "return_alpha": "Multiplier for returned-item handling effort compared with normal item scanning. Returns create staffed POS workload but do not increase SCO-suitable demand.",
     "early_pressure_tickets": "Half-hour ticket threshold used as an early queue-pressure signal. This is not full capacity breach; it identifies intervals worth testing for SCO fit.",
-    "capacity_breach_tickets": "Half-hour ticket threshold for practical capacity risk. It can be derived from service time assumptions and utilization.",
-    "threshold_basket_items": "Basket size used only to derive the practical capacity-breach threshold from service time assumptions.",
-    "capacity_breach_utilization": "Utilization level used to derive capacity breach. Example: 0.80 means the threshold is set at 80% of theoretical 30-minute POS capacity.",
+    "capacity_breach_utilization": "Utilization level used to derive each store's capacity-breach threshold. Example: 0.80 means the threshold is set at 80% of theoretical 30-minute POS capacity.",
+    "capacity_estimation_top_n": "Number of busiest core POS half-hour blocks used per store to estimate that store's peak basket size for capacity calculation. If a store lacks enough clean blocks, the app falls back to a network-level estimate.",
     "basket_rollout": "Maximum clean items per ticket for a peak interval to be treated as rollout-grade small-basket pressure.",
     "basket_pilot": "Maximum clean items per ticket for a peak interval to be treated as pilot-grade small-basket pressure.",
     "min_clean_basket_coverage": "Minimum share of tickets in a block that must come from clean basket rows before the block is allowed to influence basket suitability.",
@@ -219,6 +217,10 @@ def assert_integer_like(series: pd.Series, column_name: str) -> pd.Series:
 
 @st.cache_data(show_spinner=False)
 def load_transaction_csv(uploaded_file) -> pd.DataFrame:
+    try:
+        uploaded_file.seek(0)
+    except Exception:
+        pass
     df = pd.read_csv(uploaded_file)
     missing = REQUIRED_COLUMNS - set(df.columns)
     if missing:
@@ -344,6 +346,82 @@ def input_validation_summary(df: pd.DataFrame) -> pd.DataFrame:
     return pd.DataFrame(rows)
 
 
+def estimate_store_capacity_by_store(df: pd.DataFrame, p: Params) -> pd.DataFrame:
+    """
+    Estimate peak basket size and capacity-breach threshold separately for each store.
+    """
+    b = df[df["core_baseline"] & df["is_pos"]].copy()
+    stores = sorted(df["STORE_ID"].unique())
+
+    if b.empty:
+        fallback_basket = 2.7
+        fallback_note = "Fallback default: no core POS rows available."
+    else:
+        hh_all = b.groupby(["STORE_ID", "TIME_BLOCK"], as_index=False).agg(
+            pos_tickets=("NUMBER_OF_TICKETS", "sum"),
+            clean_tickets=("clean_basket_tickets", "sum"),
+            clean_items=("clean_basket_items", "sum"),
+        )
+        hh_all["clean_coverage"] = hh_all["clean_tickets"] / hh_all["pos_tickets"].replace(0, pd.NA)
+        clean_all = hh_all[
+            (hh_all["pos_tickets"] > 0)
+            & (hh_all["clean_tickets"] > 0)
+            & (hh_all["clean_coverage"] >= p.min_clean_basket_coverage)
+        ].copy()
+
+        if clean_all.empty:
+            fallback_basket = 2.7
+            fallback_note = "Fallback default: no blocks with sufficient clean basket coverage."
+        else:
+            global_top = clean_all.sort_values("pos_tickets", ascending=False).head(min(p.capacity_estimation_top_n, len(clean_all)))
+            fallback_basket = float(global_top["clean_items"].sum() / global_top["clean_tickets"].sum())
+            fallback_note = f"Network fallback from top {len(global_top)} busiest clean core POS blocks."
+
+    rows = []
+    for sid in stores:
+        store_blocks = pd.DataFrame()
+        if not b.empty:
+            hh_store = b[b["STORE_ID"] == sid].groupby(["STORE_ID", "TIME_BLOCK"], as_index=False).agg(
+                pos_tickets=("NUMBER_OF_TICKETS", "sum"),
+                clean_tickets=("clean_basket_tickets", "sum"),
+                clean_items=("clean_basket_items", "sum"),
+            )
+            if not hh_store.empty:
+                hh_store["clean_coverage"] = hh_store["clean_tickets"] / hh_store["pos_tickets"].replace(0, pd.NA)
+                store_blocks = hh_store[
+                    (hh_store["pos_tickets"] > 0)
+                    & (hh_store["clean_tickets"] > 0)
+                    & (hh_store["clean_coverage"] >= p.min_clean_basket_coverage)
+                ].copy()
+
+        if store_blocks.empty:
+            basket = fallback_basket
+            n_blocks = 0
+            method = fallback_note
+            avg_clean_coverage = pd.NA
+        else:
+            top = store_blocks.sort_values("pos_tickets", ascending=False).head(min(p.capacity_estimation_top_n, len(store_blocks)))
+            basket = float(top["clean_items"].sum() / top["clean_tickets"].sum())
+            n_blocks = int(len(top))
+            avg_clean_coverage = float(top["clean_tickets"].sum() / top["pos_tickets"].sum()) if top["pos_tickets"].sum() else pd.NA
+            method = f"Store-specific estimate from top {n_blocks} busiest clean core POS blocks."
+
+        service_sec = p.fixed_sec + p.scan_sec * basket
+        capacity_breach = int(round(p.capacity_breach_utilization * 1800 / max(service_sec, 1e-6)))
+
+        rows.append({
+            "STORE_ID": sid,
+            "store_capacity_basket_items": float(basket),
+            "store_capacity_estimation_blocks": n_blocks,
+            "store_capacity_clean_coverage": avg_clean_coverage,
+            "store_capacity_breach_tickets": capacity_breach,
+            "store_capacity_estimation_method": method,
+        })
+
+    return pd.DataFrame(rows)
+
+
+
 def load_optional_master(uploaded_file) -> Optional[pd.DataFrame]:
     if uploaded_file is None:
         return None
@@ -384,13 +462,10 @@ with st.sidebar:
     return_alpha = st.number_input("Return item effort factor α", 0.0, 2.0, 0.50, 0.05, help=param_help("return_alpha"))
 
     st.header("3) Pressure thresholds")
-    threshold_basket = st.number_input("Basket size for capacity derivation", 1.0, 20.0, 2.7, 0.1, help=param_help("threshold_basket_items"))
-    practical_util = st.number_input("Capacity-breach utilization", 0.10, 1.00, 0.80, 0.05, help=param_help("capacity_breach_utilization"))
-    derived_capacity = int(round(practical_util * 1800 / max(fixed_sec + scan_sec * threshold_basket, 1e-6)))
-
     early_pressure = st.number_input("Early pressure tickets / 30 min", 5, 120, 30, 1, help=param_help("early_pressure_tickets"))
-    capacity_breach = st.number_input("Capacity-breach tickets / 30 min", 5, 140, derived_capacity, 1, help=param_help("capacity_breach_tickets"))
-    st.caption(f"Derived capacity-breach threshold: {derived_capacity} tickets / 30 min")
+    practical_util = st.number_input("Capacity-breach utilization", 0.10, 1.00, 0.80, 0.05, help=param_help("capacity_breach_utilization"))
+    capacity_top_n = st.number_input("Peak blocks per store for capacity estimate", 10, 1000, 50, 10, help=param_help("capacity_estimation_top_n"))
+    st.caption("Capacity-breach tickets are calculated separately for each store from its own estimated peak basket size.")
 
     st.header("4) Basket fit / small-basket suitability")
     basket_rollout = st.number_input("Max items/ticket for rollout-grade peak", 1.0, 15.0, 4.0, 0.5, help=param_help("basket_rollout"))
@@ -434,9 +509,8 @@ params = Params(
     scan_sec=float(scan_sec),
     return_alpha=float(return_alpha),
     early_pressure_tickets=int(early_pressure),
-    capacity_breach_tickets=int(capacity_breach),
-    threshold_basket_items=float(threshold_basket),
     capacity_breach_utilization=float(practical_util),
+    capacity_estimation_top_n=int(capacity_top_n),
     basket_rollout=float(basket_rollout),
     basket_pilot=float(basket_pilot),
     min_clean_basket_coverage=float(clean_coverage),
@@ -589,7 +663,7 @@ def store_data_quality(df: pd.DataFrame, mask: pd.Series, p: Params) -> pd.DataF
 # =============================================================================
 
 
-def aggregate_pos_halfhours(df: pd.DataFrame, mask: pd.Series, p: Params, period: str) -> pd.DataFrame:
+def aggregate_pos_halfhours(df: pd.DataFrame, mask: pd.Series, p: Params, period: str, capacity_by_store: pd.DataFrame) -> pd.DataFrame:
     b = df[mask & df["is_pos"]].copy()
     if b.empty:
         return pd.DataFrame()
@@ -636,6 +710,7 @@ def aggregate_pos_halfhours(df: pd.DataFrame, mask: pd.Series, p: Params, period
     hh = hh.drop(columns=["possible_netting_tickets_calc"])
 
     hh = hh.merge(pos_use, on=["STORE_ID", "TIME_BLOCK"], how="left")
+    hh = hh.merge(capacity_by_store, on="STORE_ID", how="left")
 
     # peak concentration uses tickets. small-basket suitability uses clean basket rows only.
     hh["net_items_per_ticket"] = hh["pos_items"] / hh["positive_pos_tickets"].replace(0, np.nan)
@@ -643,7 +718,7 @@ def aggregate_pos_halfhours(df: pd.DataFrame, mask: pd.Series, p: Params, period
     hh["clean_basket_ticket_coverage"] = hh["clean_basket_tickets"] / hh["pos_tickets"].replace(0, np.nan)
 
     hh["early_pressure"] = hh["pos_tickets"] >= p.early_pressure_tickets
-    hh["capacity_breach"] = hh["pos_tickets"] >= p.capacity_breach_tickets
+    hh["capacity_breach"] = hh["pos_tickets"] >= hh["store_capacity_breach_tickets"]
 
     clean_enough = hh["clean_basket_ticket_coverage"] >= p.min_clean_basket_coverage
     hh["small_basket_peak_rollout"] = hh["early_pressure"] & clean_enough & (hh["clean_items_per_ticket"] <= p.basket_rollout)
@@ -753,6 +828,11 @@ def summarize_store_metrics(df: pd.DataFrame, hh: pd.DataFrame, p: Params, perio
             "p75_daily_peak": float(np.percentile(daily["daily_peak"], 75)) if len(daily) else np.nan,
             "p90_daily_peak": float(np.percentile(daily["daily_peak"], 90)) if len(daily) else np.nan,
             "max_halfhour": int(g["pos_tickets"].max()) if len(g) else 0,
+            "store_capacity_basket_items": float(g["store_capacity_basket_items"].iloc[0]) if "store_capacity_basket_items" in g and len(g) else np.nan,
+            "store_capacity_breach_tickets": int(g["store_capacity_breach_tickets"].iloc[0]) if "store_capacity_breach_tickets" in g and len(g) else 0,
+            "store_capacity_estimation_blocks": int(g["store_capacity_estimation_blocks"].iloc[0]) if "store_capacity_estimation_blocks" in g and len(g) else 0,
+            "store_capacity_clean_coverage": g["store_capacity_clean_coverage"].iloc[0] if "store_capacity_clean_coverage" in g and len(g) else np.nan,
+            "store_capacity_estimation_method": g["store_capacity_estimation_method"].iloc[0] if "store_capacity_estimation_method" in g and len(g) else "",
             "early_pressure_intervals": int(g["early_pressure"].sum()),
             "capacity_breach_intervals": int(g["capacity_breach"].sum()),
             "hp_median_clean_items_per_ticket": float(hp["clean_items_per_ticket"].median()) if len(hp) else np.nan,
@@ -1047,9 +1127,10 @@ master = load_optional_master(master_file)
 df = enrich(raw_df, params)
 quality_core = store_data_quality(df, df["core_baseline"], params)
 quality_sat = store_data_quality(df, df["saturday_module"], params)
+capacity_by_store = estimate_store_capacity_by_store(df, params)
 
-core_hh = aggregate_pos_halfhours(df, df["core_baseline"], params, "core_weekday_nonholiday")
-sat_hh = aggregate_pos_halfhours(df, df["saturday_module"], params, "saturday_nonholiday")
+core_hh = aggregate_pos_halfhours(df, df["core_baseline"], params, "core_weekday_nonholiday", capacity_by_store)
+sat_hh = aggregate_pos_halfhours(df, df["saturday_module"], params, "saturday_nonholiday", capacity_by_store)
 
 core_metrics, core_monthly, core_time = summarize_store_metrics(df, core_hh, params, "core_weekday_nonholiday", quality_core)
 sat_metrics, sat_monthly, sat_time = summarize_store_metrics(df, sat_hh, params, "saturday_nonholiday", quality_sat)
@@ -1130,6 +1211,7 @@ with tabs[0]:
         st.markdown("#### Top store actions")
         cols = [
             "STORE_ID", "decision_score", "recommended_action", "pos_count", "has_sco",
+            "store_capacity_basket_items", "store_capacity_breach_tickets",
             "sb_peak_rollout_intervals", "sb_peak_rollout_per100_open_hh",
             "sb_peak_rollout_day_share", "sb_rollout_median_items_per_ticket",
             "data_quality_confidence",
@@ -1190,7 +1272,8 @@ with tabs[2]:
         """
         The dataset is aggregated at half-hour × POS level, so sales and returns/corrections may be netted in the same row.
         Peak concentration remains valid because tickets are non-negative. Small-basket suitability is protected by excluding rows where
-        <code>NUMBER_OF_ITEMS &lt; NUMBER_OF_TICKETS</code> from basket-size scoring and requiring clean ticket coverage in qualifying blocks.
+        <code>NUMBER_OF_ITEMS &lt; NUMBER_OF_TICKETS</code> from basket-size scoring, requiring clean ticket coverage in qualifying blocks,
+        and using the median clean basket size across qualifying blocks for store-level basket metrics.
         """,
         unsafe_allow_html=True,
     )
@@ -1254,12 +1337,14 @@ with tabs[4]:
         unsafe_allow_html=True,
     )
 
-    c1, c2, c3, c4, c5 = st.columns(5)
+    c1, c2, c3, c4, c5, c6 = st.columns(6)
     c1.metric("POS count", int(row["pos_count"]))
     c2.metric("Has SCO", "Yes" if row["has_sco"] else "No")
-    c3.metric("SB peak intervals", int(row["sb_peak_rollout_intervals"]))
-    c4.metric("Netting ticket share", pct(row["possible_netting_ticket_share"]))
-    c5.metric("Clean peak basket", fmt(row["sb_rollout_median_items_per_ticket"], 2))
+    c3.metric("Capacity basket", fmt(row["store_capacity_basket_items"], 2))
+    c4.metric("Capacity-breach tickets", int(row["store_capacity_breach_tickets"]))
+    c5.metric("SB peak intervals", int(row["sb_peak_rollout_intervals"]))
+    c6.metric("Clean peak basket", fmt(row["sb_rollout_median_items_per_ticket"], 2))
+    st.caption(row["store_capacity_estimation_method"])
 
     smonth = core_monthly[core_monthly["STORE_ID"] == selected_store].sort_values("month")
     if not smonth.empty:
@@ -1396,6 +1481,7 @@ with tabs[8]:
         download_df_button(core_time, "Time profile CSV", "sco_time_profile_core.csv")
     with d4:
         download_df_button(core_hh, "Half-hour diagnostic CSV", "sco_halfhour_diagnostic.csv")
+    download_df_button(capacity_by_store, "Store-specific capacity estimates CSV", "sco_store_capacity_estimates.csv")
 
     if master is None:
         st.info("No store master uploaded. Urbanity, tourist format, floor space, retail-media potential, and local competition are not used in the blind score.")

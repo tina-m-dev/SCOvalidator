@@ -69,3 +69,24 @@ Do not upload the competition CSV to GitHub. Upload it inside the app.
 ## Parameter explanations
 
 The app includes tooltip explanations for each configurable model parameter in the sidebar. The `Assumptions and exports` tab also exports a parameter table with value and description.
+
+
+## Auto-estimated capacity basket size
+
+Capacity basket size and capacity-breach threshold are automatically estimated per store after a valid transaction CSV is uploaded.
+
+Default logic:
+- Monday-Friday non-holiday POS rows only
+- aggregate to store × half-hour
+- exclude potential netting rows from basket calculation
+- require minimum clean basket-ticket coverage
+- take the top N busiest POS half-hour blocks per store
+- calculate ticket-weighted clean items per ticket for each store
+- derive store-specific capacity-breach tickets from service time and utilization
+
+The user no longer enters basket size manually; it is calculated internally per store.
+
+
+## Store-specific capacity estimates
+
+The app exports `sco_store_capacity_estimates.csv`, which contains each store's estimated peak basket size and derived capacity-breach threshold.
