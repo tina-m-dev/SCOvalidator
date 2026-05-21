@@ -37,10 +37,51 @@ st.markdown(
         margin-bottom: 12px;
     }
     .small-muted {font-size:0.82rem; color:#667085;}
-    .action-grid {display:grid; grid-template-columns:repeat(3,1fr); gap:12px; margin:12px 0 8px 0;}
+    .intro-box {
+        margin: 8px 0 14px 0;
+        padding: 15px 17px;
+        border: 1px solid #EAECF0;
+        border-radius: 16px;
+        background: #F9FAFB;
+    }
+    .intro-title {
+        font-size: 1.05rem;
+        font-weight: 650;
+        color: #101828;
+        margin-bottom: 4px;
+    }
+    .intro-subtitle {
+        font-size: 0.94rem;
+        color: #475467;
+        line-height: 1.35;
+    }
+    .action-grid {display:grid; grid-template-columns:repeat(3,1fr); gap:12px; margin:12px 0 12px 0;}
     .action-card {border:1px solid #EAECF0; border-radius:14px; padding:14px 16px; background:#FFFFFF; box-shadow:0 1px 2px rgba(0,0,0,0.03);}
     .action-card b {font-size:1.02rem;}
     .action-card p {font-size:0.90rem; color:#475467; margin:6px 0 0 0;}
+    .criteria-box {
+        margin: 4px 0 18px 0;
+        padding: 13px 15px;
+        border: 1px solid #EAECF0;
+        border-radius: 14px;
+        background: #FFFFFF;
+    }
+    .criteria-title {
+        font-size: 0.96rem;
+        font-weight: 650;
+        color: #344054;
+        margin-bottom: 9px;
+    }
+    .criteria-chip-row {display:flex; flex-wrap:wrap; gap:8px;}
+    .criteria-chip {
+        display:inline-block;
+        padding: 6px 10px;
+        border: 1px solid #D0D5DD;
+        border-radius: 999px;
+        font-size: 0.88rem;
+        color: #344054;
+        background: #F9FAFB;
+    }
     </style>
     """,
     unsafe_allow_html=True,
@@ -49,12 +90,27 @@ st.markdown(
 st.title("Self-service checkout potential assessment")
 st.markdown(
     """
+    <div class="intro-box">
+      <div class="intro-title">Classifies each store into one of three self-checkout actions.</div>
+      <div class="intro-subtitle">The goal is to identify stores where self-checkout can reduce checkout pressure, fit the customer basket, and make operational sense.</div>
+    </div>
+
     <div class="action-grid">
       <div class="action-card"><b>2 — Rollout / optimize</b><p>Strong fit: repeated busy checkout periods, small baskets, clean data, and workable POS setup.</p></div>
       <div class="action-card"><b>1 — Pilot / validate</b><p>Potential fit, but field validation, better data confidence, or a payback check is needed.</p></div>
       <div class="action-card"><b>0 — Defer / diagnose</b><p>Weak fit, or the store problem is not solved by self-service checkout.</p></div>
     </div>
-    <div class="small-muted">Assessment signals: busy checkout periods, basket size, POS setup, data quality, and payback estimate.</div>
+
+    <div class="criteria-box">
+      <div class="criteria-title">Assessment criteria</div>
+      <div class="criteria-chip-row">
+        <span class="criteria-chip">Busy checkout periods</span>
+        <span class="criteria-chip">Basket size</span>
+        <span class="criteria-chip">POS setup</span>
+        <span class="criteria-chip">Data quality</span>
+        <span class="criteria-chip">Payback estimate</span>
+      </div>
+    </div>
     """,
     unsafe_allow_html=True,
 )
@@ -1155,6 +1211,31 @@ def download_df_button(df: pd.DataFrame, label: str, filename: str):
     st.download_button(label, data=df.to_csv(index=False).encode("utf-8"), file_name=filename, mime="text/csv")
 
 
+def display_table(df: pd.DataFrame, *, row_height: int | None = None, height: int | None = None):
+    """Display tables with long text columns easier to read."""
+    long_text_columns = {
+        "rationale": "Rationale",
+        "pos_capacity_intervention_logic": "POS capacity logic",
+        "data_quality_flags": "Data-quality flags",
+        "store_capacity_estimation_method": "Capacity estimate method",
+        "recommended_action": "Recommended action",
+        "review_flags": "Review flags",
+    }
+    column_config = {
+        col: st.column_config.TextColumn(label, width="large")
+        for col, label in long_text_columns.items()
+        if col in df.columns
+    }
+    st.dataframe(
+        df,
+        use_container_width=True,
+        hide_index=True,
+        column_config=column_config,
+        row_height=row_height,
+        height=height,
+    )
+
+
 # =============================================================================
 # Run analysis
 # =============================================================================
@@ -1256,7 +1337,7 @@ with tabs[0]:
             "sb_peak_rollout_day_share", "sb_rollout_median_items_per_ticket",
             "data_quality_confidence",
         ]
-        st.dataframe(core_metrics[cols].head(12), use_container_width=True, hide_index=True)
+        display_table(core_metrics[cols].head(12), row_height=75, height=430)
 
 with tabs[1]:
     st.subheader("Recommendation engine")
@@ -1288,7 +1369,26 @@ with tabs[1]:
         "data_quality_confidence", "true_multi_share_hp", "large_basket_share_in_true_multi_hp",
         "uncertain_basket_share_in_true_multi_hp", "structurally_required_staffed_pos",
     ]
-    st.dataframe(view[[c for c in display_cols if c in view.columns]], use_container_width=True, hide_index=True)
+    display_table(view[[c for c in display_cols if c in view.columns]], row_height=115, height=650)
+
+    if not view.empty and "rationale" in view.columns:
+        st.markdown("#### Full rationale")
+        rationale_store = st.selectbox(
+            "Select a store to read the full rationale",
+            view["STORE_ID"].tolist(),
+            key="recommendation_rationale_store",
+        )
+        selected_rationale = view.loc[view["STORE_ID"] == rationale_store].iloc[0]
+        st.markdown(
+            f"""
+            <div class="method-box">
+            <b>Store {int(rationale_store)} · {selected_rationale['recommended_action']} · Score {int(selected_rationale['decision_score'])}</b><br>
+            {selected_rationale['rationale']}
+            </div>
+            """,
+            unsafe_allow_html=True,
+        )
+
     download_df_button(view, "Download filtered recommendation table", "sco_recommendations_filtered.csv")
 
 with tabs[2]:
@@ -1305,7 +1405,7 @@ with tabs[2]:
     )
 
     st.markdown("#### Input format checks")
-    st.dataframe(input_checks, use_container_width=True, hide_index=True)
+    display_table(input_checks, row_height=80, height=420)
 
     st.markdown("#### Netting-risk safeguards")
     st.markdown(
@@ -1355,7 +1455,7 @@ with tabs[3]:
     if k2_view.empty:
         st.info("No stores with 2+ POS found.")
     else:
-        st.dataframe(k2_view, use_container_width=True, hide_index=True)
+        display_table(k2_view, row_height=110, height=600)
         download_df_button(k2_view, "Download POS capacity logic table", "sco_k2_pos_logic.csv")
 
 with tabs[4]:
@@ -1413,7 +1513,7 @@ with tabs[4]:
         fig2.update_layout(height=420, xaxis_tickangle=-90)
         st.plotly_chart(fig2, use_container_width=True)
 
-    st.dataframe(smonth, use_container_width=True, hide_index=True)
+    display_table(smonth, row_height=55, height=360)
 
     st.markdown("#### Payback estimate for this store")
     with st.expander("Edit financial assumptions", expanded=False):
@@ -1525,7 +1625,7 @@ with tabs[5]:
         c2.metric("Median SCO ticket share", pct(sco_summary["sco_ticket_share"].median()))
         c3.metric("Median POS–SCO basket gap", fmt(sco_summary["basket_gap_pos_minus_sco"].median(), 2))
 
-        st.dataframe(sco_summary, use_container_width=True, hide_index=True)
+        display_table(sco_summary, row_height=90, height=520)
         download_df_button(sco_summary, "Download SCO adoption summary", "sco_adoption_summary.csv")
 
         fig = px.scatter(
@@ -1547,7 +1647,7 @@ with tabs[6]:
     assumptions_df.columns = ["parameter", "value"]
     assumptions_df["description"] = assumptions_df["parameter"].map(PARAM_DESCRIPTIONS).fillna("")
     assumptions_df = assumptions_df[["parameter", "value", "description"]]
-    st.dataframe(assumptions_df, use_container_width=True, hide_index=True)
+    display_table(assumptions_df, row_height=95, height=620)
     download_df_button(assumptions_df, "Download assumptions", "sco_assumptions.csv")
 
     d1, d2, d3, d4 = st.columns(4)
@@ -1565,4 +1665,4 @@ with tabs[6]:
         st.info("No store master uploaded. Urbanity, tourist format, floor space, retail-media potential, and local competition are not used in the blind score.")
     else:
         st.success("Store master loaded. Metadata is merged into output tables but does not override the blind transaction-based score.")
-        st.dataframe(master.head(20), use_container_width=True, hide_index=True)
+        display_table(master.head(20), row_height=80, height=420)

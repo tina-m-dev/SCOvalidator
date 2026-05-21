@@ -105,3 +105,13 @@ The recommendation action is now score-dependent. For example, a store with oper
 ## Staffed POS vs SCO terminal wording
 
 `pos_count` means staffed POS terminals only. SCO terminals are counted separately as `sco_count`. Store deep dive now shows both values to avoid confusion in stores that already have SCO.
+
+
+## Homepage intro polish
+
+The homepage now has a short explanatory intro, three action cards, and a separate assessment-criteria section for easier reading.
+
+
+## Long text tables
+
+Tables with long text columns now use larger row height and wide text columns. The recommendation tab also includes a full-rationale selector for reading the complete explanation for one store.
