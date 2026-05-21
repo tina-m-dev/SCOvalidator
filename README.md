@@ -115,3 +115,8 @@ The homepage now has a short explanatory intro, three action cards, and a separa
 ## Long text tables
 
 Tables with long text columns now use larger row height and wide text columns. The recommendation tab also includes a full-rationale selector for reading the complete explanation for one store.
+
+
+## Clean recommendation table
+
+The main recommendation table no longer includes the long `rationale` column. Full rationale is shown below the table for the selected store.

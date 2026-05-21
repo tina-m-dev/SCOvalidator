@@ -1361,7 +1361,7 @@ with tabs[1]:
     ].copy()
 
     display_cols = [
-        "STORE_ID", "decision_score", "recommended_action", "pos_capacity_intervention_logic", "rationale",
+        "STORE_ID", "decision_score", "recommended_action", "pos_capacity_intervention_logic",
         "pos_count", "sco_count", "total_checkout_terminals", "has_sco", "days", "observed_open_halfhours", "pos_tickets", "tickets_per_open_hh",
         "median_daily_peak", "early_pressure_intervals", "capacity_breach_intervals",
         "sb_peak_rollout_intervals", "sb_peak_rollout_per100_open_hh", "sb_peak_rollout_day_share",
@@ -1369,7 +1369,7 @@ with tabs[1]:
         "data_quality_confidence", "true_multi_share_hp", "large_basket_share_in_true_multi_hp",
         "uncertain_basket_share_in_true_multi_hp", "structurally_required_staffed_pos",
     ]
-    display_table(view[[c for c in display_cols if c in view.columns]], row_height=115, height=650)
+    display_table(view[[c for c in display_cols if c in view.columns]], row_height=70, height=520)
 
     if not view.empty and "rationale" in view.columns:
         st.markdown("#### Full rationale")
@@ -1383,7 +1383,8 @@ with tabs[1]:
             f"""
             <div class="method-box">
             <b>Store {int(rationale_store)} · {selected_rationale['recommended_action']} · Score {int(selected_rationale['decision_score'])}</b><br>
-            {selected_rationale['rationale']}
+            <b>POS capacity logic:</b> {selected_rationale.get('pos_capacity_intervention_logic', '-')}<br>
+            <b>Rationale:</b> {selected_rationale['rationale']}
             </div>
             """,
             unsafe_allow_html=True,
