@@ -125,23 +125,3 @@ The main recommendation table no longer includes the long `rationale` column. Fu
 ## Compact tables
 
 Main tables use compact row height. Long explanations are shown below the table for the selected store instead of expanding every row.
-
-
-## Data-quality metric labels
-
-The Data Quality tab no longer uses Streamlit delta arrows for anomaly shares. Percentages are shown as captions, e.g. `0.5% of core rows`.
-
-
-## Low-confidence store list
-
-The Data Quality tab now includes a dedicated list of low-confidence stores, with the main reason flags and risk shares, before the full store-level data-quality table.
-
-
-## Existing SCO tab cleanup
-
-Network-level median SCO metrics were removed. The tab now focuses on the store-level adoption table and the adoption-vs-basket-separation chart.
-
-
-## Existing SCO table height
-
-The Existing SCO table now uses a compact dynamic height so it fits the actual number of rows more closely.
