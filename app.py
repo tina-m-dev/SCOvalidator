@@ -936,7 +936,7 @@ def classify(row: pd.Series, p: Params) -> Tuple[int, str, str, str, str]:
     k2_uncertain = (not pd.isna(row["uncertain_basket_share_in_true_multi_hp"])) and (row["uncertain_basket_share_in_true_multi_hp"] >= p.multi_pos_uncertain_basket_share_limit)
 
     if row["pos_count"] == 1:
-        k2_action = "Add SCO if SCO-suitable peak pressure and payback pass"
+        k2_action = "Single POS: keep staffed POS; SCO can only be added, not used as replacement"
         operational_fit = True
         reasons.append("single POS; no multi-POS redundancy question")
     elif multi_pos and structurally_required:
@@ -982,12 +982,16 @@ def classify(row: pd.Series, p: Params) -> Tuple[int, str, str, str, str]:
             action = "Diagnose existing SCO fit"
     else:
         if score == 2:
-            if multi_pos and not structurally_required and k1k4_exists and not k2_uncertain:
+            if row["pos_count"] == 1:
+                action = "Add SCO candidate"
+            elif multi_pos and not structurally_required and k1k4_exists and not k2_uncertain:
                 action = "Replace redundant POS with SCO / hybrid"
             else:
                 action = "Rollout candidate"
         elif score == 1:
-            if multi_pos and not structurally_required and k1k4_exists and not k2_uncertain:
+            if row["pos_count"] == 1:
+                action = "Pilot / validate adding SCO"
+            elif multi_pos and not structurally_required and k1k4_exists and not k2_uncertain:
                 action = "Pilot / validate POS replacement"
             elif multi_pos and structurally_required:
                 action = "Keep staffed POS; pilot only if add-on space exists"
@@ -998,6 +1002,8 @@ def classify(row: pd.Series, p: Params) -> Tuple[int, str, str, str, str]:
         else:
             if k1k4_exists and (return_risk or quality_low):
                 action = "Defer / diagnose before SCO"
+            elif row["pos_count"] == 1:
+                action = "Defer adding SCO"
             elif multi_pos and not structurally_required and not k1k4_exists:
                 action = "Remove / repurpose POS; not SCO case"
             elif multi_pos and structurally_required:
@@ -1476,13 +1482,23 @@ with tabs[4]:
     annual_net_benefit = annual_congestion_value + annual_labor_value - store_fixed_cost
     payback_months = store_investment / annual_net_benefit * 12 if annual_net_benefit > 0 else np.nan
 
-    pb1, pb2, pb3, pb4 = st.columns(4)
+    if pd.isna(payback_months):
+        payback_class = "No positive payback"
+    elif payback_months <= 18:
+        payback_class = "Pass"
+    elif payback_months <= 36:
+        payback_class = "Borderline"
+    else:
+        payback_class = "Fail"
+
+    pb1, pb2, pb3, pb4, pb5 = st.columns(5)
     pb1.metric("Congestion value / year", f"€{annual_congestion_value:,.0f}")
     pb2.metric("Labor value / year", f"€{annual_labor_value:,.0f}")
     pb3.metric("Net benefit / year", f"€{annual_net_benefit:,.0f}")
     pb4.metric("Payback", "-" if pd.isna(payback_months) else f"{payback_months:,.1f} months")
+    pb5.metric("Financial check", payback_class)
 
-    st.caption("This is a scenario estimate for the selected store, not a financial forecast. Replace assumptions with internal Studenac values before making an investment decision.")
+    st.caption("This is a scenario estimate for the selected store, not a financial forecast. The store recommendation is based on operational fit; this section checks whether the financial assumptions support the case.")
 
 with tabs[5]:
     st.subheader("Existing SCO adoption benchmarks")

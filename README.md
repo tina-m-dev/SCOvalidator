@@ -95,3 +95,8 @@ The app exports `sco_store_capacity_estimates.csv`, which contains each store's 
 ## UI changes
 
 The app title is `Self-service checkout potential assessment`. The standalone Saturday and payback tabs have been removed from the main flow. Payback is shown inside Store deep dive for the selected store.
+
+
+## Action wording fix
+
+The recommendation action is now score-dependent. For example, a store with operational pressure but high return/data-quality risk will not receive the same action as a clean rollout candidate. Payback remains a selected-store scenario check inside Store deep dive.
