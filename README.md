@@ -1,4 +1,4 @@
-# Kodiraona SCO Deployment Decision App
+# Self-service checkout potential assessment
 
 Streamlit app for the Kodiraona / Studenac SCO case.
 
@@ -90,3 +90,8 @@ The user no longer enters basket size manually; it is calculated internally per 
 ## Store-specific capacity estimates
 
 The app exports `sco_store_capacity_estimates.csv`, which contains each store's estimated peak basket size and derived capacity-breach threshold.
+
+
+## UI changes
+
+The app title is `Self-service checkout potential assessment`. The standalone Saturday and payback tabs have been removed from the main flow. Payback is shown inside Store deep dive for the selected store.

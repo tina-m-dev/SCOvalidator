@@ -13,7 +13,7 @@ import streamlit as st
 # =============================================================================
 
 st.set_page_config(
-    page_title="SCO Deployment Decision Framework",
+    page_title="Self-service checkout potential assessment",
     page_icon="🧾",
     layout="wide",
 )
@@ -37,15 +37,26 @@ st.markdown(
         margin-bottom: 12px;
     }
     .small-muted {font-size:0.82rem; color:#667085;}
+    .action-grid {display:grid; grid-template-columns:repeat(3,1fr); gap:12px; margin:12px 0 8px 0;}
+    .action-card {border:1px solid #EAECF0; border-radius:14px; padding:14px 16px; background:#FFFFFF; box-shadow:0 1px 2px rgba(0,0,0,0.03);}
+    .action-card b {font-size:1.02rem;}
+    .action-card p {font-size:0.90rem; color:#475467; margin:6px 0 0 0;}
     </style>
     """,
     unsafe_allow_html=True,
 )
 
-st.title("A Payback-Based Framework for SCO Deployment Decisions")
-st.caption(
-    "Classifies each store into rollout, pilot / validate, or defer using peak concentration, "
-    "small-basket suitability, POS-configuration logic, data-quality safeguards, and payback scenarios."
+st.title("Self-service checkout potential assessment")
+st.markdown(
+    """
+    <div class="action-grid">
+      <div class="action-card"><b>2 — Rollout / optimize</b><p>Strong fit: repeated busy checkout periods, small baskets, clean data, and workable POS setup.</p></div>
+      <div class="action-card"><b>1 — Pilot / validate</b><p>Potential fit, but field validation, better data confidence, or a payback check is needed.</p></div>
+      <div class="action-card"><b>0 — Defer / diagnose</b><p>Weak fit, or the store problem is not solved by self-service checkout.</p></div>
+    </div>
+    <div class="small-muted">Assessment signals: busy checkout periods, basket size, POS setup, data quality, and payback estimate.</div>
+    """,
+    unsafe_allow_html=True,
 )
 
 # =============================================================================
@@ -553,10 +564,10 @@ if csv_file is None:
     st.subheader("Core safeguards")
     st.markdown(
         """
-        - **peak concentration is traffic pressure:** tickets remain in the pressure count even when item counts are suspicious.
-        - **small-basket suitability is conservative:** rows where `NUMBER_OF_ITEMS < NUMBER_OF_TICKETS` are excluded from basket-size scoring.
-        - **POS capacity logic is hierarchical:** additional POS capacity is first tested for structural necessity; SCO replacement is recommended only if SCO-suitable peak pressure exists.
-        - **Returns are staff-only workload:** they can create POS work but cannot increase SCO suitability.
+        - **Busy checkout periods:** ticket counts are used to find repeated pressure.
+        - **Small-basket fit:** rows with possible returns/corrections are not allowed to make baskets look smaller.
+        - **POS setup:** extra POS terminals are checked before they are kept, replaced, or repurposed.
+        - **Returns:** returns can create staff workload, but they are not treated as self-checkout demand.
         """
     )
     st.stop()
@@ -970,16 +981,29 @@ def classify(row: pd.Series, p: Params) -> Tuple[int, str, str, str, str]:
         else:
             action = "Diagnose existing SCO fit"
     else:
-        if multi_pos and not structurally_required and not k1k4_exists:
-            action = "Remove / repurpose POS; not SCO case"
-        elif multi_pos and not structurally_required and k1k4_exists and not k2_uncertain:
-            action = "Replace redundant POS with SCO / hybrid"
-        elif multi_pos and structurally_required:
-            action = "Keep staffed POS; pilot only if add-on space exists"
-        elif k2_uncertain:
-            action = "Pilot / field-validate POS replacement"
+        if score == 2:
+            if multi_pos and not structurally_required and k1k4_exists and not k2_uncertain:
+                action = "Replace redundant POS with SCO / hybrid"
+            else:
+                action = "Rollout candidate"
+        elif score == 1:
+            if multi_pos and not structurally_required and k1k4_exists and not k2_uncertain:
+                action = "Pilot / validate POS replacement"
+            elif multi_pos and structurally_required:
+                action = "Keep staffed POS; pilot only if add-on space exists"
+            elif k2_uncertain:
+                action = "Pilot / field-validate POS replacement"
+            else:
+                action = "Pilot / validate"
         else:
-            action = base_action
+            if k1k4_exists and (return_risk or quality_low):
+                action = "Defer / diagnose before SCO"
+            elif multi_pos and not structurally_required and not k1k4_exists:
+                action = "Remove / repurpose POS; not SCO case"
+            elif multi_pos and structurally_required:
+                action = "Keep staffed POS; SCO not priority"
+            else:
+                action = "Defer"
 
     return score, action, "; ".join(reasons + warnings), logic, k2_action
 
@@ -1159,8 +1183,6 @@ tabs = st.tabs([
     "POS capacity logic",
     "Store deep dive",
     "Existing SCO adoption",
-    "Saturday / seasonality",
-    "Payback scenario",
     "Assumptions & exports",
 ])
 
@@ -1175,10 +1197,9 @@ with tabs[0]:
     st.markdown(
         """
         <div class="method-box">
-        <b>Decision lens:</b> peak concentration uses ticket pressure; small-basket suitability uses conservative basket suitability.
-        Rows where <code>NUMBER_OF_ITEMS &lt; NUMBER_OF_TICKETS</code> are treated as possible netting/correction risk:
-        they remain in peak concentration traffic pressure but are excluded from small-basket suitability basket scoring.
-        POS capacity logic then decides whether additional staffed POS capacity should be kept, replaced, or repurposed.
+        <b>Decision logic:</b> The app looks for stores with repeated busy checkout periods and small baskets.
+        Rows that may include returns or corrections are counted as traffic, but they are excluded from basket scoring.
+        Extra POS terminals are checked separately to decide whether they should stay, be replaced by self-checkout, or be repurposed.
         </div>
         """,
         unsafe_allow_html=True,
@@ -1375,6 +1396,94 @@ with tabs[4]:
 
     st.dataframe(smonth, use_container_width=True, hide_index=True)
 
+    st.markdown("#### Payback estimate for this store")
+    with st.expander("Edit financial assumptions", expanded=False):
+        p1, p2, p3 = st.columns(3)
+        with p1:
+            store_investment = st.number_input(
+                "Initial SCO investment (€)",
+                min_value=0.0,
+                value=9000.0,
+                step=500.0,
+                key="store_payback_investment",
+                help="Initial cost of one self-checkout deployment: hardware, setup, integration, and layout work.",
+            )
+            store_fixed_cost = st.number_input(
+                "Annual maintenance/support (€)",
+                min_value=0.0,
+                value=1200.0,
+                step=100.0,
+                key="store_payback_fixed_cost",
+                help="Annual support, maintenance, service, and similar recurring costs.",
+            )
+        with p2:
+            store_avg_ticket = st.number_input(
+                "Average ticket value (€)",
+                min_value=0.0,
+                value=7.5,
+                step=0.5,
+                key="store_payback_avg_ticket",
+                help="Average basket value in euros. Used to estimate protected gross-margin contribution.",
+            )
+            store_margin = st.number_input(
+                "Gross margin",
+                min_value=0.0,
+                max_value=1.0,
+                value=0.25,
+                step=0.01,
+                key="store_payback_margin",
+                help="Gross margin rate. Example: 0.25 means 25%.",
+            )
+        with p3:
+            store_lost_ticket = st.number_input(
+                "Avoided lost-ticket factor",
+                min_value=0.0,
+                max_value=1.0,
+                value=0.03,
+                step=0.01,
+                key="store_payback_lost_ticket",
+                help="Scenario assumption for the share of peak tickets that self-checkout could help protect.",
+            )
+            store_labor_cost = st.number_input(
+                "Fully loaded labor cost €/hour",
+                min_value=0.0,
+                value=8.5,
+                step=0.5,
+                key="store_payback_labor_cost",
+                help="Hourly labor cost including employer costs.",
+            )
+            store_redeployment = st.number_input(
+                "Labor redeployment realization",
+                min_value=0.0,
+                max_value=1.0,
+                value=0.50,
+                step=0.05,
+                key="store_payback_redeployment",
+                help="Share of released checkout time that can realistically create value elsewhere in the store.",
+            )
+
+    basket_for_payback = row["sb_rollout_median_items_per_ticket"]
+    if pd.isna(basket_for_payback):
+        basket_for_payback = row["hp_median_clean_items_per_ticket"]
+    if pd.isna(basket_for_payback):
+        basket_for_payback = row["store_capacity_basket_items"]
+
+    seconds_per_ticket = params.fixed_sec + params.scan_sec * basket_for_payback
+    addressed_peak_tickets = row["sb_peak_rollout_intervals"] * params.early_pressure_tickets
+    annual_congestion_value = addressed_peak_tickets * store_lost_ticket * store_avg_ticket * store_margin
+    released_hours = addressed_peak_tickets * seconds_per_ticket / 3600
+    annual_labor_value = released_hours * store_labor_cost * store_redeployment
+    annual_net_benefit = annual_congestion_value + annual_labor_value - store_fixed_cost
+    payback_months = store_investment / annual_net_benefit * 12 if annual_net_benefit > 0 else np.nan
+
+    pb1, pb2, pb3, pb4 = st.columns(4)
+    pb1.metric("Congestion value / year", f"€{annual_congestion_value:,.0f}")
+    pb2.metric("Labor value / year", f"€{annual_labor_value:,.0f}")
+    pb3.metric("Net benefit / year", f"€{annual_net_benefit:,.0f}")
+    pb4.metric("Payback", "-" if pd.isna(payback_months) else f"{payback_months:,.1f} months")
+
+    st.caption("This is a scenario estimate for the selected store, not a financial forecast. Replace assumptions with internal Studenac values before making an investment decision.")
+
 with tabs[5]:
     st.subheader("Existing SCO adoption benchmarks")
     st.caption("Existing SCO stores are calibration points, not deployment labels. Basket-size comparison uses clean basket rows.")
@@ -1404,66 +1513,6 @@ with tabs[5]:
         st.plotly_chart(fig, use_container_width=True)
 
 with tabs[6]:
-    st.subheader("Saturday and seasonality module")
-    st.caption("Saturday is not mixed into the core score. It is evaluated separately as an add-on module.")
-
-    if sat_metrics.empty:
-        st.info("No Saturday module data found.")
-    else:
-        sat_metrics_dec = add_decisions(sat_metrics, params).sort_values("sb_peak_rollout_per100_open_hh", ascending=False)
-        show_cols = [
-            "STORE_ID", "pos_count", "has_sco", "observed_open_halfhours", "pos_tickets",
-            "sb_peak_rollout_intervals", "sb_peak_rollout_per100_open_hh", "sb_peak_rollout_day_share",
-            "sb_rollout_median_items_per_ticket", "pos_capacity_intervention_logic", "data_quality_confidence",
-        ]
-        st.dataframe(sat_metrics_dec[[c for c in show_cols if c in sat_metrics_dec.columns]], use_container_width=True, hide_index=True)
-        download_df_button(sat_metrics_dec, "Download Saturday module metrics", "sco_saturday_module_metrics.csv")
-
-with tabs[7]:
-    st.subheader("Payback scenario calculator")
-    st.caption("Scenario only: the dataset does not contain CAPEX, margin, basket value, labor cost, or observed abandonment.")
-    col1, col2, col3 = st.columns(3)
-    with col1:
-        investment = st.number_input("Initial SCO investment (€)", min_value=0.0, value=9000.0, step=500.0, help="Initial capital cost of one SCO deployment: hardware, setup, integration, and layout work. Used only in the scenario calculator.")
-        fixed_cost = st.number_input("Annual maintenance/support (€)", min_value=0.0, value=1200.0, step=100.0, help="Annual fixed cost for support, maintenance, service and similar recurring SCO costs. Used only in the scenario calculator.")
-    with col2:
-        avg_basket_value = st.number_input("Average ticket value (€)", min_value=0.0, value=7.5, step=0.5, help="Average basket value in euros. Used to translate avoided lost tickets into gross-margin contribution.")
-        gross_margin = st.number_input("Gross margin", min_value=0.0, max_value=1.0, value=0.25, step=0.01, help="Gross margin rate used to convert protected revenue into contribution. Example: 0.25 means 25%.")
-    with col3:
-        abandonment = st.number_input("Avoided lost-ticket factor", min_value=0.0, max_value=1.0, value=0.03, step=0.01, help="Scenario assumption for the share of peak tickets at risk of abandonment or leakage that SCO could help protect.")
-        labor_cost = st.number_input("Fully loaded labor cost €/hour", min_value=0.0, value=8.5, step=0.5, help="Hourly cost of labor including employer costs. Used to value released checkout time.")
-        redeployment = st.number_input("Labor redeployment realization", min_value=0.0, max_value=1.0, value=0.50, step=0.05, help="Share of released checkout time that can realistically create value elsewhere in the store.")
-
-    scenario = core_metrics.copy()
-    avg_peak_items = scenario["sb_rollout_median_items_per_ticket"].fillna(scenario["hp_median_clean_items_per_ticket"]).fillna(2.7)
-    seconds_per_ticket = params.fixed_sec + params.scan_sec * avg_peak_items
-    scenario["annual_congestion_value_eur"] = (
-        scenario["sb_peak_rollout_intervals"] * params.early_pressure_tickets * abandonment * avg_basket_value * gross_margin
-    )
-    scenario["released_checkout_hours_proxy"] = (
-        scenario["sb_peak_rollout_intervals"] * params.early_pressure_tickets * seconds_per_ticket / 3600
-    )
-    scenario["annual_labor_value_eur"] = scenario["released_checkout_hours_proxy"] * labor_cost * redeployment
-    scenario["annual_net_benefit_eur"] = scenario["annual_congestion_value_eur"] + scenario["annual_labor_value_eur"] - fixed_cost
-    scenario["payback_months"] = np.where(
-        scenario["annual_net_benefit_eur"] > 0,
-        investment / scenario["annual_net_benefit_eur"] * 12,
-        np.nan,
-    )
-
-    show = scenario.sort_values("payback_months", na_position="last")
-    st.dataframe(
-        show[[
-            "STORE_ID", "decision_score", "recommended_action", "annual_congestion_value_eur",
-            "annual_labor_value_eur", "annual_net_benefit_eur", "payback_months",
-        ]],
-        use_container_width=True,
-        hide_index=True,
-    )
-    download_df_button(show, "Download payback scenario", "sco_payback_scenario.csv")
-    st.warning("Treat this as a scenario calculator, not a precise financial forecast.")
-
-with tabs[8]:
     st.subheader("Assumptions and exports")
     assumptions_df = pd.DataFrame([params.__dict__]).T.reset_index()
     assumptions_df.columns = ["parameter", "value"]
