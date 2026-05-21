@@ -323,6 +323,14 @@ def load_transaction_csv(uploaded_file) -> pd.DataFrame:
         examples = df.loc[df["NUMBER_OF_TICKETS"] < 0, "NUMBER_OF_TICKETS"].drop_duplicates().head(10).tolist()
         raise ValueError(f"NUMBER_OF_TICKETS must be >= 0. Invalid examples: {examples}")
 
+    # Exact duplicate transactional rows would double-count the same traffic.
+    # Remove them transparently and keep the count for the Data Quality tab.
+    duplicate_subset = ["STORE_ID", "POS", "IS_SELF_CHECKOUT", "TIME_BLOCK", "NUMBER_OF_TICKETS", "NUMBER_OF_ITEMS"]
+    exact_duplicate_rows_removed = int(df.duplicated(subset=duplicate_subset).sum())
+    if exact_duplicate_rows_removed:
+        df = df.drop_duplicates(subset=duplicate_subset, keep="first").copy()
+    df.attrs["exact_duplicate_rows_removed"] = exact_duplicate_rows_removed
+
     # Same STORE_ID + POS terminal cannot switch between staffed POS and SCO.
     # If it does, POS mapping is unreliable and the model should not guess.
     type_counts = df.groupby(["STORE_ID", "POS"])["IS_SELF_CHECKOUT"].nunique()
@@ -342,7 +350,7 @@ def input_validation_summary(df: pd.DataFrame) -> pd.DataFrame:
     """Soft validation after hard schema gates have passed."""
     rows = []
 
-    duplicate_full_rows = int(df.duplicated().sum())
+    exact_duplicate_rows_removed = int(df.attrs.get("exact_duplicate_rows_removed", 0))
     duplicate_key_rows = int(df.duplicated(subset=["STORE_ID", "POS", "IS_SELF_CHECKOUT", "TIME_BLOCK"], keep=False).sum())
     zero_ticket_rows = int((df["NUMBER_OF_TICKETS"] == 0).sum())
     negative_item_rows = int((df["NUMBER_OF_ITEMS"] < 0).sum())
@@ -356,9 +364,14 @@ def input_validation_summary(df: pd.DataFrame) -> pd.DataFrame:
         {"check": "NUMBER_OF_TICKETS", "status": "Pass", "details": "Integer-like and non-negative"},
         {"check": "POS terminal IDs", "status": "Pass", "details": "Positive integer IDs; same STORE_ID+POS does not switch checkout type"},
         {
+            "check": "Exact duplicate rows removed",
+            "status": "Cleaned" if exact_duplicate_rows_removed else "Pass",
+            "details": f"{exact_duplicate_rows_removed:,} exact duplicate transactional rows removed before scoring"
+        },
+        {
             "check": "Duplicate key rows",
             "status": "Review" if duplicate_key_rows else "Pass",
-            "details": f"{duplicate_key_rows:,} rows share STORE_ID + POS + IS_SELF_CHECKOUT + TIME_BLOCK"
+            "details": f"{duplicate_key_rows:,} rows share STORE_ID + POS + IS_SELF_CHECKOUT + TIME_BLOCK after exact deduplication"
         },
         {
             "check": "Zero-ticket rows",
@@ -1420,16 +1433,49 @@ with tabs[2]:
         unsafe_allow_html=True,
     )
 
-    q1, q2, q3, q4 = st.columns(4)
+    q1, q2, q3, q4, q5 = st.columns(5)
     total_rows = len(df[df["core_baseline"]])
     anomaly_rows = int(df[df["core_baseline"]]["possible_netting"].sum())
     neg_rows = int(df[df["core_baseline"]]["is_return"].sum())
-    q1.metric("Core rows", f"{total_rows:,}")
-    q2.metric("ITEMS < TICKETS rows", f"{anomaly_rows:,}", pct(anomaly_rows / total_rows if total_rows else np.nan))
-    q3.metric("Negative item rows", f"{neg_rows:,}")
-    q4.metric("Low-confidence stores", int((quality_core["data_quality_confidence"] == "Low").sum()))
+    exact_duplicates_removed = int(raw_df.attrs.get("exact_duplicate_rows_removed", 0))
+    anomaly_share = anomaly_rows / total_rows if total_rows else np.nan
+    negative_share = neg_rows / total_rows if total_rows else np.nan
 
-    st.dataframe(quality_core.sort_values(["data_quality_confidence", "possible_netting_ticket_share"], ascending=[True, False]), use_container_width=True, hide_index=True)
+    q1.metric("Core rows", f"{total_rows:,}")
+    q2.metric("Exact duplicates removed", f"{exact_duplicates_removed:,}")
+    q3.metric("ITEMS < TICKETS rows", f"{anomaly_rows:,}")
+    q3.caption(f"{pct(anomaly_share)} of core rows")
+    q4.metric("Negative item rows", f"{neg_rows:,}")
+    q4.caption(f"{pct(negative_share)} of core rows")
+    low_confidence_stores = quality_core[quality_core["data_quality_confidence"] == "Low"].copy()
+    q5.metric("Low-confidence stores", int(len(low_confidence_stores)))
+
+    if not low_confidence_stores.empty:
+        st.markdown("#### Low-confidence stores")
+        st.caption("These stores are not clean rollout candidates until the data-quality issue is understood.")
+        low_cols = [
+            "STORE_ID",
+            "data_quality_confidence",
+            "data_quality_flags",
+            "possible_netting_ticket_share",
+            "negative_ticket_share",
+            "duplicate_key_rows",
+        ]
+        display_table(
+            low_confidence_stores[[c for c in low_cols if c in low_confidence_stores.columns]]
+            .sort_values(["possible_netting_ticket_share", "negative_ticket_share"], ascending=[False, False]),
+            row_height=42,
+            height=180,
+        )
+    else:
+        st.success("No low-confidence stores in the core baseline.")
+
+    st.markdown("#### Store-level data-quality table")
+    display_table(
+        quality_core.sort_values(["data_quality_confidence", "possible_netting_ticket_share"], ascending=[True, False]),
+        row_height=38,
+        height=420,
+    )
     download_df_button(quality_core, "Download data quality table", "sco_data_quality_core.csv")
     download_df_button(input_checks, "Download input validation checks", "sco_input_validation_checks.csv")
 
@@ -1622,13 +1668,22 @@ with tabs[5]:
     if sco_summary.empty:
         st.info("No existing SCO stores found.")
     else:
-        c1, c2, c3 = st.columns(3)
+        c1, c2 = st.columns(2)
         c1.metric("Existing SCO stores", sco_summary["STORE_ID"].nunique())
-        c2.metric("Median SCO ticket share", pct(sco_summary["sco_ticket_share"].median()))
-        c3.metric("Median POS–SCO basket gap", fmt(sco_summary["basket_gap_pos_minus_sco"].median(), 2))
+        c2.metric("Stores with review flags", int((sco_summary["review_flags"] != "none").sum()))
 
-        display_table(sco_summary, row_height=42, height=430)
+        display_table(sco_summary, row_height=38, height=min(260, 70 + 42 * len(sco_summary)))
         download_df_button(sco_summary, "Download SCO adoption summary", "sco_adoption_summary.csv")
+
+        st.markdown(
+            """
+            <div class="method-box">
+            <b>How to read the chart:</b> the x-axis shows how much SCO is used, the y-axis shows whether SCO is used for smaller baskets than POS.
+            Larger bubbles mean more high-pressure checkout intervals. The best pattern is high SCO share with a positive basket gap.
+            </div>
+            """,
+            unsafe_allow_html=True,
+        )
 
         fig = px.scatter(
             sco_summary,
