@@ -120,3 +120,8 @@ Tables with long text columns now use larger row height and wide text columns. T
 ## Clean recommendation table
 
 The main recommendation table no longer includes the long `rationale` column. Full rationale is shown below the table for the selected store.
+
+
+## Compact tables
+
+Main tables use compact row height. Long explanations are shown below the table for the selected store instead of expanding every row.

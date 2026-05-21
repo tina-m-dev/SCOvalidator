@@ -1211,8 +1211,8 @@ def download_df_button(df: pd.DataFrame, label: str, filename: str):
     st.download_button(label, data=df.to_csv(index=False).encode("utf-8"), file_name=filename, mime="text/csv")
 
 
-def display_table(df: pd.DataFrame, *, row_height: int | None = None, height: int | None = None):
-    """Display tables with long text columns easier to read."""
+def display_table(df: pd.DataFrame, *, row_height: int | None = 38, height: int | None = None):
+    """Display tables with compact rows; long text is shown outside the main table when needed."""
     long_text_columns = {
         "rationale": "Rationale",
         "pos_capacity_intervention_logic": "POS capacity logic",
@@ -1337,7 +1337,7 @@ with tabs[0]:
             "sb_peak_rollout_day_share", "sb_rollout_median_items_per_ticket",
             "data_quality_confidence",
         ]
-        display_table(core_metrics[cols].head(12), row_height=75, height=430)
+        display_table(core_metrics[cols].head(12), row_height=38, height=390)
 
 with tabs[1]:
     st.subheader("Recommendation engine")
@@ -1369,10 +1369,11 @@ with tabs[1]:
         "data_quality_confidence", "true_multi_share_hp", "large_basket_share_in_true_multi_hp",
         "uncertain_basket_share_in_true_multi_hp", "structurally_required_staffed_pos",
     ]
-    display_table(view[[c for c in display_cols if c in view.columns]], row_height=70, height=520)
+    display_table(view[[c for c in display_cols if c in view.columns]], row_height=38, height=470)
 
     if not view.empty and "rationale" in view.columns:
         st.markdown("#### Full rationale")
+        st.caption("The table above is kept compact for screening; full explanation is shown here for the selected store.")
         rationale_store = st.selectbox(
             "Select a store to read the full rationale",
             view["STORE_ID"].tolist(),
@@ -1406,7 +1407,7 @@ with tabs[2]:
     )
 
     st.markdown("#### Input format checks")
-    display_table(input_checks, row_height=80, height=420)
+    display_table(input_checks, row_height=38, height=360)
 
     st.markdown("#### Netting-risk safeguards")
     st.markdown(
@@ -1456,7 +1457,7 @@ with tabs[3]:
     if k2_view.empty:
         st.info("No stores with 2+ POS found.")
     else:
-        display_table(k2_view, row_height=110, height=600)
+        display_table(k2_view, row_height=42, height=480)
         download_df_button(k2_view, "Download POS capacity logic table", "sco_k2_pos_logic.csv")
 
 with tabs[4]:
@@ -1514,7 +1515,7 @@ with tabs[4]:
         fig2.update_layout(height=420, xaxis_tickangle=-90)
         st.plotly_chart(fig2, use_container_width=True)
 
-    display_table(smonth, row_height=55, height=360)
+    display_table(smonth, row_height=36, height=320)
 
     st.markdown("#### Payback estimate for this store")
     with st.expander("Edit financial assumptions", expanded=False):
@@ -1626,7 +1627,7 @@ with tabs[5]:
         c2.metric("Median SCO ticket share", pct(sco_summary["sco_ticket_share"].median()))
         c3.metric("Median POS–SCO basket gap", fmt(sco_summary["basket_gap_pos_minus_sco"].median(), 2))
 
-        display_table(sco_summary, row_height=90, height=520)
+        display_table(sco_summary, row_height=42, height=430)
         download_df_button(sco_summary, "Download SCO adoption summary", "sco_adoption_summary.csv")
 
         fig = px.scatter(
@@ -1648,7 +1649,7 @@ with tabs[6]:
     assumptions_df.columns = ["parameter", "value"]
     assumptions_df["description"] = assumptions_df["parameter"].map(PARAM_DESCRIPTIONS).fillna("")
     assumptions_df = assumptions_df[["parameter", "value", "description"]]
-    display_table(assumptions_df, row_height=95, height=620)
+    display_table(assumptions_df, row_height=44, height=520)
     download_df_button(assumptions_df, "Download assumptions", "sco_assumptions.csv")
 
     d1, d2, d3, d4 = st.columns(4)
@@ -1666,4 +1667,4 @@ with tabs[6]:
         st.info("No store master uploaded. Urbanity, tourist format, floor space, retail-media potential, and local competition are not used in the blind score.")
     else:
         st.success("Store master loaded. Metadata is merged into output tables but does not override the blind transaction-based score.")
-        display_table(master.head(20), row_height=80, height=420)
+        display_table(master.head(20), row_height=38, height=360)
