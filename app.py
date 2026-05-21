@@ -1424,12 +1424,43 @@ with tabs[2]:
     total_rows = len(df[df["core_baseline"]])
     anomaly_rows = int(df[df["core_baseline"]]["possible_netting"].sum())
     neg_rows = int(df[df["core_baseline"]]["is_return"].sum())
-    q1.metric("Core rows", f"{total_rows:,}")
-    q2.metric("ITEMS < TICKETS rows", f"{anomaly_rows:,}", pct(anomaly_rows / total_rows if total_rows else np.nan))
-    q3.metric("Negative item rows", f"{neg_rows:,}")
-    q4.metric("Low-confidence stores", int((quality_core["data_quality_confidence"] == "Low").sum()))
+    anomaly_share = anomaly_rows / total_rows if total_rows else np.nan
+    negative_share = neg_rows / total_rows if total_rows else np.nan
 
-    st.dataframe(quality_core.sort_values(["data_quality_confidence", "possible_netting_ticket_share"], ascending=[True, False]), use_container_width=True, hide_index=True)
+    q1.metric("Core rows", f"{total_rows:,}")
+    q2.metric("ITEMS < TICKETS rows", f"{anomaly_rows:,}")
+    q2.caption(f"{pct(anomaly_share)} of core rows")
+    q3.metric("Negative item rows", f"{neg_rows:,}")
+    q3.caption(f"{pct(negative_share)} of core rows")
+    low_confidence_stores = quality_core[quality_core["data_quality_confidence"] == "Low"].copy()
+    q4.metric("Low-confidence stores", int(len(low_confidence_stores)))
+
+    if not low_confidence_stores.empty:
+        st.markdown("#### Low-confidence stores")
+        st.caption("These stores are not clean rollout candidates until the data-quality issue is understood.")
+        low_cols = [
+            "STORE_ID",
+            "data_quality_confidence",
+            "data_quality_flags",
+            "possible_netting_ticket_share",
+            "negative_ticket_share",
+            "duplicate_key_rows",
+        ]
+        display_table(
+            low_confidence_stores[[c for c in low_cols if c in low_confidence_stores.columns]]
+            .sort_values(["possible_netting_ticket_share", "negative_ticket_share"], ascending=[False, False]),
+            row_height=42,
+            height=180,
+        )
+    else:
+        st.success("No low-confidence stores in the core baseline.")
+
+    st.markdown("#### Store-level data-quality table")
+    display_table(
+        quality_core.sort_values(["data_quality_confidence", "possible_netting_ticket_share"], ascending=[True, False]),
+        row_height=38,
+        height=420,
+    )
     download_df_button(quality_core, "Download data quality table", "sco_data_quality_core.csv")
     download_df_button(input_checks, "Download input validation checks", "sco_input_validation_checks.csv")
 
@@ -1622,13 +1653,22 @@ with tabs[5]:
     if sco_summary.empty:
         st.info("No existing SCO stores found.")
     else:
-        c1, c2, c3 = st.columns(3)
+        c1, c2 = st.columns(2)
         c1.metric("Existing SCO stores", sco_summary["STORE_ID"].nunique())
-        c2.metric("Median SCO ticket share", pct(sco_summary["sco_ticket_share"].median()))
-        c3.metric("Median POS–SCO basket gap", fmt(sco_summary["basket_gap_pos_minus_sco"].median(), 2))
+        c2.metric("Stores with review flags", int((sco_summary["review_flags"] != "none").sum()))
 
-        display_table(sco_summary, row_height=42, height=430)
+        display_table(sco_summary, row_height=38, height=min(260, 70 + 42 * len(sco_summary)))
         download_df_button(sco_summary, "Download SCO adoption summary", "sco_adoption_summary.csv")
+
+        st.markdown(
+            """
+            <div class="method-box">
+            <b>How to read the chart:</b> the x-axis shows how much SCO is used, the y-axis shows whether SCO is used for smaller baskets than POS.
+            Larger bubbles mean more high-pressure checkout intervals. The best pattern is high SCO share with a positive basket gap.
+            </div>
+            """,
+            unsafe_allow_html=True,
+        )
 
         fig = px.scatter(
             sco_summary,
