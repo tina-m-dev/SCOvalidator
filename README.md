@@ -100,3 +100,8 @@ The app title is `Self-service checkout potential assessment`. The standalone Sa
 ## Action wording fix
 
 The recommendation action is now score-dependent. For example, a store with operational pressure but high return/data-quality risk will not receive the same action as a clean rollout candidate. Payback remains a selected-store scenario check inside Store deep dive.
+
+
+## Staffed POS vs SCO terminal wording
+
+`pos_count` means staffed POS terminals only. SCO terminals are counted separately as `sco_count`. Store deep dive now shows both values to avoid confusion in stores that already have SCO.

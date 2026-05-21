@@ -566,7 +566,7 @@ if csv_file is None:
         """
         - **Busy checkout periods:** ticket counts are used to find repeated pressure.
         - **Small-basket fit:** rows with possible returns/corrections are not allowed to make baskets look smaller.
-        - **POS setup:** extra POS terminals are checked before they are kept, replaced, or repurposed.
+        - **POS setup:** extra staffed POS terminals are checked before they are kept, replaced, or repurposed.
         - **Returns:** returns can create staff workload, but they are not treated as self-checkout demand.
         """
     )
@@ -746,6 +746,7 @@ def summarize_store_metrics(df: pd.DataFrame, hh: pd.DataFrame, p: Params, perio
         return pd.DataFrame(), pd.DataFrame(), pd.DataFrame()
 
     pos_count = df[df["is_pos"]].groupby("STORE_ID")["POS"].nunique()
+    sco_count = df[df["is_sco"]].groupby("STORE_ID")["POS"].nunique()
     has_sco = df.groupby("STORE_ID")["is_sco"].any()
     rows, monthly_rows, time_rows = [], [], []
 
@@ -826,6 +827,8 @@ def summarize_store_metrics(df: pd.DataFrame, hh: pd.DataFrame, p: Params, perio
             "STORE_ID": sid,
             "period": period,
             "pos_count": int(pos_count.get(sid, 0)),
+            "sco_count": int(sco_count.get(sid, 0)),
+            "total_checkout_terminals": int(pos_count.get(sid, 0)) + int(sco_count.get(sid, 0)),
             "has_sco": bool(has_sco.get(sid, False)),
             "days": int(days),
             "observed_open_halfhours": int(open_hh),
@@ -935,27 +938,37 @@ def classify(row: pd.Series, p: Params) -> Tuple[int, str, str, str, str]:
     structurally_required = bool(row["structurally_required_staffed_pos"])
     k2_uncertain = (not pd.isna(row["uncertain_basket_share_in_true_multi_hp"])) and (row["uncertain_basket_share_in_true_multi_hp"] >= p.multi_pos_uncertain_basket_share_limit)
 
-    if row["pos_count"] == 1:
-        k2_action = "Single POS: keep staffed POS; SCO can only be added, not used as replacement"
+    if row["has_sco"] and row["pos_count"] == 1:
+        k2_action = "Existing SCO store: keep the staffed POS and optimize SCO usage"
         operational_fit = True
-        reasons.append("single POS; no multi-POS redundancy question")
+        reasons.append("existing SCO store with one staffed POS fallback")
+    elif row["pos_count"] == 1:
+        k2_action = "Single staffed POS: keep staffed POS; SCO can only be added, not used as replacement"
+        operational_fit = True
+        reasons.append("single staffed POS; no multi-POS redundancy question")
     elif multi_pos and structurally_required:
-        k2_action = "Keep additional staffed POS; do not replace without field validation"
+        if row["has_sco"]:
+            k2_action = "Existing SCO store: keep additional staffed POS unless field validation proves redundancy"
+        else:
+            k2_action = "Keep additional staffed POS; do not replace without field validation"
         operational_fit = False
         warnings.append("additional staffed POS appears structurally required")
     elif multi_pos and k2_uncertain:
-        k2_action = "Field-validate additional POS before replacement"
+        k2_action = "Field-validate additional staffed POS before replacement"
         operational_fit = False
         warnings.append("multi-POS basket suitability uncertain due to netting/coverage risk")
     elif multi_pos and not structurally_required and k1k4_exists:
-        k2_action = "Replace redundant POS with SCO / hybrid candidate"
+        if row["has_sco"]:
+            k2_action = "Existing SCO store: review whether extra staffed POS capacity can be reduced or reconfigured"
+        else:
+            k2_action = "Replace redundant staffed POS with SCO / hybrid candidate"
         operational_fit = True
-        reasons.append("additional POS not structurally required; SCO-suitable pressure exists")
+        reasons.append("additional staffed POS not structurally required; SCO-suitable pressure exists")
         warnings.append("validate layout, cash/process constraints, and fallback capacity")
     elif multi_pos and not structurally_required and not k1k4_exists:
-        k2_action = "Remove / repurpose redundant POS; not an SCO case"
+        k2_action = "Remove / repurpose redundant staffed POS; not an SCO case"
         operational_fit = False
-        warnings.append("additional POS not structurally required, but SCO-suitable pressure is weak")
+        warnings.append("additional staffed POS not structurally required, but SCO-suitable pressure is weak")
     else:
         k2_action = "Field validation required"
         operational_fit = False
@@ -1205,7 +1218,7 @@ with tabs[0]:
         <div class="method-box">
         <b>Decision logic:</b> The app looks for stores with repeated busy checkout periods and small baskets.
         Rows that may include returns or corrections are counted as traffic, but they are excluded from basket scoring.
-        Extra POS terminals are checked separately to decide whether they should stay, be replaced by self-checkout, or be repurposed.
+        Extra staffed POS terminals are checked separately to decide whether they should stay, be replaced by self-checkout, or be repurposed.
         </div>
         """,
         unsafe_allow_html=True,
@@ -1237,7 +1250,7 @@ with tabs[0]:
     with right:
         st.markdown("#### Top store actions")
         cols = [
-            "STORE_ID", "decision_score", "recommended_action", "pos_count", "has_sco",
+            "STORE_ID", "decision_score", "recommended_action", "pos_count", "sco_count", "total_checkout_terminals", "has_sco",
             "store_capacity_basket_items", "store_capacity_breach_tickets",
             "sb_peak_rollout_intervals", "sb_peak_rollout_per100_open_hh",
             "sb_peak_rollout_day_share", "sb_rollout_median_items_per_ticket",
@@ -1268,7 +1281,7 @@ with tabs[1]:
 
     display_cols = [
         "STORE_ID", "decision_score", "recommended_action", "pos_capacity_intervention_logic", "rationale",
-        "pos_count", "has_sco", "days", "observed_open_halfhours", "pos_tickets", "tickets_per_open_hh",
+        "pos_count", "sco_count", "total_checkout_terminals", "has_sco", "days", "observed_open_halfhours", "pos_tickets", "tickets_per_open_hh",
         "median_daily_peak", "early_pressure_intervals", "capacity_breach_intervals",
         "sb_peak_rollout_intervals", "sb_peak_rollout_per100_open_hh", "sb_peak_rollout_day_share",
         "sb_rollout_median_items_per_ticket", "return_share", "possible_netting_ticket_share",
@@ -1333,7 +1346,7 @@ with tabs[3]:
         unsafe_allow_html=True,
     )
     k2_cols = [
-        "STORE_ID", "pos_count", "has_sco", "pos_capacity_intervention_logic", "recommended_action",
+        "STORE_ID", "pos_count", "sco_count", "total_checkout_terminals", "has_sco", "pos_capacity_intervention_logic", "recommended_action",
         "early_pressure_intervals", "capacity_breach_intervals", "sb_peak_rollout_intervals",
         "true_multi_share_hp", "large_basket_share_in_true_multi_hp", "uncertain_basket_share_in_true_multi_hp",
         "structurally_required_staffed_pos", "data_quality_confidence", "rationale",
@@ -1365,11 +1378,11 @@ with tabs[4]:
     )
 
     c1, c2, c3, c4, c5, c6 = st.columns(6)
-    c1.metric("POS count", int(row["pos_count"]))
-    c2.metric("Has SCO", "Yes" if row["has_sco"] else "No")
+    c1.metric("Staffed POS", int(row["pos_count"]))
+    c2.metric("SCO terminals", int(row["sco_count"]))
     c3.metric("Capacity basket", fmt(row["store_capacity_basket_items"], 2))
     c4.metric("Capacity-breach tickets", int(row["store_capacity_breach_tickets"]))
-    c5.metric("SB peak intervals", int(row["sb_peak_rollout_intervals"]))
+    c5.metric("Small-basket peak intervals", int(row["sb_peak_rollout_intervals"]))
     c6.metric("Clean peak basket", fmt(row["sb_rollout_median_items_per_ticket"], 2))
     st.caption(row["store_capacity_estimation_method"])
 
