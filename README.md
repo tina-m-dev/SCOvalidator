@@ -171,3 +171,28 @@ The app no longer includes:
 - payback calculator
 
 These are treated as additional validation layers for the case-study PDF. With internal Studenac data, A future production version should add store format, urban/tourist context, layout feasibility, retail-media potential, CAPEX/OPEX, margin, labor cost, lost-sales estimate and payback logic.
+
+
+## Outlier and brand styling update
+
+- Terminal half-hour blocks above the maximum tickets threshold are removed before scoring.
+- Exact duplicate rows are still removed before scoring.
+- Extreme basket-size rows are excluded from basket scoring but their ticket traffic remains in pressure analysis.
+- The UI uses brand-inspired orange, green and navy accents.
+
+
+## Additional data-quality safeguards
+
+- TIME_BLOCK must be aligned to half-hour blocks (:00 or :30).
+- Croatian public holidays are calculated dynamically for years present in the dataset.
+- Duplicate-key rows are measured by ticket share and can lower data-quality confidence if material.
+- Rows with positive items but zero tickets are removed before scoring.
+
+
+## Store deep dive charts
+
+Store deep dive now separates:
+- Mon–Fri baseline charts used for the recommendation score
+- Saturday signal charts shown for interpretation only
+
+Sundays and Croatian public holidays are not included in the core score or Saturday view.

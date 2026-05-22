@@ -21,17 +21,25 @@ st.set_page_config(
 st.markdown(
     """
     <style>
+    :root {
+        --studenac-orange: #F58220;
+        --studenac-green: #1B8A3B;
+        --kodiraona-navy: #10233F;
+        --soft-orange: #FFF3E8;
+        --soft-green: #EAF7EF;
+    }
     .main .block-container {padding-top: 1.25rem; padding-bottom: 2rem;}
+    h1, h2, h3 {color: var(--kodiraona-navy);}
     .decision-box {
-        border-left: 5px solid #B42318;
-        background:#FFF7F5;
+        border-left: 6px solid var(--studenac-orange);
+        background:#FFF7F0;
         padding:14px 16px;
         border-radius:12px;
         margin-bottom:12px;
     }
     .method-box {
-        border:1px solid #EAECF0;
-        background:#F9FAFB;
+        border:1px solid #D6EADF;
+        background:#F7FCF9;
         padding:13px 15px;
         border-radius:12px;
         margin-bottom: 12px;
@@ -40,9 +48,10 @@ st.markdown(
     .intro-box {
         margin: 8px 0 14px 0;
         padding: 15px 17px;
-        border: 1px solid #EAECF0;
+        border: 1px solid #F8C99B;
+        border-left: 6px solid var(--studenac-orange);
         border-radius: 16px;
-        background: #F9FAFB;
+        background: #FFF8F1;
     }
     .intro-title {
         font-size: 1.05rem;
@@ -57,7 +66,10 @@ st.markdown(
     }
     .action-grid {display:grid; grid-template-columns:repeat(3,1fr); gap:12px; margin:12px 0 12px 0;}
     .action-card {border:1px solid #EAECF0; border-radius:14px; padding:14px 16px; background:#FFFFFF; box-shadow:0 1px 2px rgba(0,0,0,0.03);}
-    .action-card b {font-size:1.02rem;}
+    .action-card:nth-child(1) {border-top: 4px solid var(--studenac-green);}
+    .action-card:nth-child(2) {border-top: 4px solid var(--studenac-orange);}
+    .action-card:nth-child(3) {border-top: 4px solid var(--kodiraona-navy);}
+    .action-card b {font-size:1.02rem; color: var(--kodiraona-navy);}
     .action-card p {font-size:0.90rem; color:#475467; margin:6px 0 0 0;}
     .criteria-box {
         margin: 4px 0 18px 0;
@@ -76,11 +88,15 @@ st.markdown(
     .criteria-chip {
         display:inline-block;
         padding: 6px 10px;
-        border: 1px solid #D0D5DD;
+        border: 1px solid #B9DEC5;
         border-radius: 999px;
         font-size: 0.88rem;
-        color: #344054;
-        background: #F9FAFB;
+        color: #175C2B;
+        background: #F3FBF6;
+    }
+    div.stButton > button, div.stDownloadButton > button {
+        border-color: var(--studenac-orange) !important;
+        color: var(--kodiraona-navy) !important;
     }
     </style>
     """,
@@ -129,11 +145,51 @@ REQUIRED_COLUMNS = {
     "NUMBER_OF_ITEMS",
 }
 
-CROATIAN_HOLIDAYS = set(pd.to_datetime([
-    "2023-01-01", "2023-01-06", "2023-04-09", "2023-04-10", "2023-05-01",
-    "2023-05-30", "2023-06-08", "2023-06-22", "2023-08-05", "2023-08-15",
-    "2023-11-01", "2023-11-18", "2023-12-25", "2023-12-26", "2024-01-01",
-]).date)
+def easter_sunday(year: int) -> pd.Timestamp:
+    """Gregorian Easter Sunday using Meeus/Jones/Butcher algorithm."""
+    a = year % 19
+    b = year // 100
+    c = year % 100
+    d = b // 4
+    e = b % 4
+    f = (b + 8) // 25
+    g = (b - f + 1) // 3
+    h = (19 * a + b - d - g + 15) % 30
+    i = c // 4
+    k = c % 4
+    l = (32 + 2 * e + 2 * i - h - k) % 7
+    m = (a + 11 * h + 22 * l) // 451
+    month = (h + l - 7 * m + 114) // 31
+    day = ((h + l - 7 * m + 114) % 31) + 1
+    return pd.Timestamp(year=year, month=month, day=day)
+
+
+def croatian_public_holidays(years) -> set:
+    """Croatian public holidays relevant for the dataset years."""
+    holidays = set()
+    for year in sorted(set(int(y) for y in years)):
+        fixed_dates = [
+            (1, 1),    # New Year's Day
+            (1, 6),    # Epiphany
+            (5, 1),    # Labour Day
+            (5, 30),   # Statehood Day
+            (6, 22),   # Anti-Fascist Struggle Day
+            (8, 5),    # Victory and Homeland Thanksgiving Day
+            (8, 15),   # Assumption of Mary
+            (11, 1),   # All Saints' Day
+            (11, 18),  # Remembrance Day
+            (12, 25),  # Christmas
+            (12, 26),  # Saint Stephen's Day
+        ]
+        for month, day in fixed_dates:
+            holidays.add(pd.Timestamp(year=year, month=month, day=day).date())
+
+        easter = easter_sunday(year)
+        holidays.add(easter.date())  # Easter Sunday, mostly redundant because Sundays are excluded
+        holidays.add((easter + pd.Timedelta(days=1)).date())   # Easter Monday
+        holidays.add((easter + pd.Timedelta(days=60)).date())  # Corpus Christi
+
+    return holidays
 
 
 @dataclass
@@ -175,6 +231,12 @@ class Params:
     return_risk: float
     netting_ticket_share_medium: float
     netting_ticket_share_high: float
+    duplicate_key_ticket_share_medium: float
+    duplicate_key_ticket_share_high: float
+    max_terminal_tickets_per_halfhour: int
+    basket_outlier_mad_multiplier: float
+    basket_outlier_network_quantile: float
+    basket_outlier_ticket_share_medium: float
 
     # multi-POS / POS capacity logic
     multi_pos_second_min_tickets: int
@@ -215,6 +277,12 @@ PARAM_DESCRIPTIONS = {
     "return_risk": "Return-share level considered risky. Above this threshold, pressure may be driven by staff-only workload rather than SCO-suitable demand.",
     "netting_ticket_share_medium": "Medium-risk threshold for tickets in rows where items are lower than tickets, indicating possible sales/return netting.",
     "netting_ticket_share_high": "High-risk threshold for tickets in potentially netted rows. High netting risk lowers confidence and can cap the recommendation.",
+    "duplicate_key_ticket_share_medium": "If this share of tickets comes from duplicate-key rows, the store gets a medium duplicate-key aggregation risk flag.",
+    "duplicate_key_ticket_share_high": "If this share of tickets comes from duplicate-key rows, the store gets a high duplicate-key aggregation risk flag and confidence is set to Low.",
+    "max_terminal_tickets_per_halfhour": "Hard plausibility cap for tickets per one terminal in one half-hour. Terminal blocks above this value are excluded from scoring and shown in Data Quality.",
+    "basket_outlier_mad_multiplier": "Robust outlier multiplier used to identify extreme items-per-ticket rows by store. Basket outliers are excluded from basket-size scoring, not from ticket traffic.",
+    "basket_outlier_network_quantile": "Network quantile used as a second high-basket outlier safeguard. Example: 0.999 uses the 99.9th percentile as a high-end plausibility threshold.",
+    "basket_outlier_ticket_share_medium": "If this share of tickets comes from basket-size outlier rows, the store gets a basket outlier review flag and confidence can be capped at Medium.",
     "multi_pos_second_min_tickets": "Minimum ticket count for the second-strongest POS terminal to be considered materially active in a half-hour.",
     "multi_pos_second_min_share": "Minimum share of total POS tickets that the second-strongest POS must carry to count as meaningful parallel usage.",
     "multi_pos_min_total_tickets": "Minimum total POS tickets in a half-hour before multi-POS usage is considered operationally meaningful.",
@@ -284,7 +352,7 @@ def assert_integer_like(series: pd.Series, column_name: str) -> pd.Series:
 
 
 @st.cache_data(show_spinner=False)
-def load_transaction_csv(uploaded_file) -> pd.DataFrame:
+def load_transaction_csv(uploaded_file, max_terminal_tickets_per_halfhour: int = 70) -> pd.DataFrame:
     try:
         uploaded_file.seek(0)
     except Exception:
@@ -299,6 +367,19 @@ def load_transaction_csv(uploaded_file) -> pd.DataFrame:
     if parsed_time.isna().any():
         examples = df.loc[parsed_time.isna(), "TIME_BLOCK"].drop_duplicates().head(10).tolist()
         raise ValueError(f"TIME_BLOCK contains invalid timestamps. Invalid rows: {int(parsed_time.isna().sum())}. Examples: {examples}")
+
+    half_hour_aligned = (
+        parsed_time.dt.minute.isin([0, 30])
+        & (parsed_time.dt.second == 0)
+        & (parsed_time.dt.microsecond == 0)
+    )
+    if (~half_hour_aligned).any():
+        examples = df.loc[~half_hour_aligned, "TIME_BLOCK"].drop_duplicates().head(10).tolist()
+        raise ValueError(
+            "TIME_BLOCK must be aligned to half-hour blocks (:00 or :30, with zero seconds). "
+            f"Invalid rows: {int((~half_hour_aligned).sum())}. Examples: {examples}"
+        )
+
     df["TIME_BLOCK"] = parsed_time
 
     # Strict boolean parsing. Do not silently coerce random values into True.
@@ -332,6 +413,41 @@ def load_transaction_csv(uploaded_file) -> pd.DataFrame:
         df = df.drop_duplicates(subset=duplicate_subset, keep="first").copy()
     df.attrs["exact_duplicate_rows_removed"] = exact_duplicate_rows_removed
 
+    # A single POS/SCO terminal cannot plausibly process unlimited tickets in one half-hour.
+    # Check after exact deduplication and at terminal-half-hour level, so duplicate-key rows are tested after aggregation.
+    key_cols = ["STORE_ID", "POS", "IS_SELF_CHECKOUT", "TIME_BLOCK"]
+    terminal_ticket_sums = df.groupby(key_cols, as_index=False)["NUMBER_OF_TICKETS"].sum()
+    traffic_outlier_keys = terminal_ticket_sums[
+        terminal_ticket_sums["NUMBER_OF_TICKETS"] > max_terminal_tickets_per_halfhour
+    ][key_cols]
+
+    traffic_outlier_blocks_removed = int(len(traffic_outlier_keys))
+    traffic_outlier_rows_removed = 0
+    traffic_outlier_tickets_removed = 0
+
+    if traffic_outlier_blocks_removed:
+        marker = traffic_outlier_keys.assign(_traffic_outlier=True)
+        df = df.merge(marker, on=key_cols, how="left")
+        outlier_mask = df["_traffic_outlier"].fillna(False)
+        traffic_outlier_rows_removed = int(outlier_mask.sum())
+        traffic_outlier_tickets_removed = int(df.loc[outlier_mask, "NUMBER_OF_TICKETS"].sum())
+        df = df.loc[~outlier_mask].drop(columns=["_traffic_outlier"]).copy()
+
+    df.attrs["traffic_outlier_blocks_removed"] = traffic_outlier_blocks_removed
+    df.attrs["traffic_outlier_rows_removed"] = traffic_outlier_rows_removed
+    df.attrs["traffic_outlier_tickets_removed"] = traffic_outlier_tickets_removed
+    df.attrs["max_terminal_tickets_per_halfhour"] = int(max_terminal_tickets_per_halfhour)
+
+    # Positive items with zero tickets cannot represent a valid ticketed checkout block.
+    # Remove them from scoring and report the count in Data Quality.
+    positive_items_zero_ticket_mask = (df["NUMBER_OF_TICKETS"] == 0) & (df["NUMBER_OF_ITEMS"] > 0)
+    positive_items_zero_ticket_rows_removed = int(positive_items_zero_ticket_mask.sum())
+    positive_items_zero_ticket_items_removed = int(df.loc[positive_items_zero_ticket_mask, "NUMBER_OF_ITEMS"].sum())
+    if positive_items_zero_ticket_rows_removed:
+        df = df.loc[~positive_items_zero_ticket_mask].copy()
+    df.attrs["positive_items_zero_ticket_rows_removed"] = positive_items_zero_ticket_rows_removed
+    df.attrs["positive_items_zero_ticket_items_removed"] = positive_items_zero_ticket_items_removed
+
     # Same STORE_ID + POS terminal cannot switch between staffed POS and SCO.
     # If it does, POS mapping is unreliable and the model should not guess.
     type_counts = df.groupby(["STORE_ID", "POS"])["IS_SELF_CHECKOUT"].nunique()
@@ -352,6 +468,12 @@ def input_validation_summary(df: pd.DataFrame) -> pd.DataFrame:
     rows = []
 
     exact_duplicate_rows_removed = int(df.attrs.get("exact_duplicate_rows_removed", 0))
+    traffic_outlier_blocks_removed = int(df.attrs.get("traffic_outlier_blocks_removed", 0))
+    traffic_outlier_rows_removed = int(df.attrs.get("traffic_outlier_rows_removed", 0))
+    traffic_outlier_tickets_removed = int(df.attrs.get("traffic_outlier_tickets_removed", 0))
+    max_terminal_tickets_per_halfhour = int(df.attrs.get("max_terminal_tickets_per_halfhour", 70))
+    positive_items_zero_ticket_rows_removed = int(df.attrs.get("positive_items_zero_ticket_rows_removed", 0))
+    positive_items_zero_ticket_items_removed = int(df.attrs.get("positive_items_zero_ticket_items_removed", 0))
     duplicate_key_rows = int(df.duplicated(subset=["STORE_ID", "POS", "IS_SELF_CHECKOUT", "TIME_BLOCK"], keep=False).sum())
     zero_ticket_rows = int((df["NUMBER_OF_TICKETS"] == 0).sum())
     negative_item_rows = int((df["NUMBER_OF_ITEMS"] < 0).sum())
@@ -368,6 +490,16 @@ def input_validation_summary(df: pd.DataFrame) -> pd.DataFrame:
             "check": "Exact duplicate rows removed",
             "status": "Cleaned" if exact_duplicate_rows_removed else "Pass",
             "details": f"{exact_duplicate_rows_removed:,} exact duplicate transactional rows removed before scoring"
+        },
+        {
+            "check": "Traffic outlier terminal half-hours removed",
+            "status": "Cleaned" if traffic_outlier_blocks_removed else "Pass",
+            "details": f"{traffic_outlier_blocks_removed:,} terminal half-hour block(s), {traffic_outlier_rows_removed:,} row(s), and {traffic_outlier_tickets_removed:,} ticket(s) removed where terminal tickets exceeded {max_terminal_tickets_per_halfhour}"
+        },
+        {
+            "check": "Positive items with zero tickets removed",
+            "status": "Cleaned" if positive_items_zero_ticket_rows_removed else "Pass",
+            "details": f"{positive_items_zero_ticket_rows_removed:,} row(s) removed where NUMBER_OF_TICKETS = 0 but NUMBER_OF_ITEMS > 0; {positive_items_zero_ticket_items_removed:,} item(s) removed from scoring"
         },
         {
             "check": "Duplicate key rows",
@@ -550,6 +682,12 @@ with st.sidebar:
         return_risk = st.number_input("Return-risk threshold", 0.0, 0.20, 0.02, 0.005, format="%.3f", help=param_help("return_risk"))
         netting_medium = st.number_input("Medium netting-risk ticket share", 0.0, 1.0, 0.02, 0.005, format="%.3f", help=param_help("netting_ticket_share_medium"))
         netting_high = st.number_input("High netting-risk ticket share", 0.0, 1.0, 0.10, 0.01, format="%.3f", help=param_help("netting_ticket_share_high"))
+        duplicate_key_medium = st.number_input("Medium duplicate-key ticket share", 0.0, 1.0, 0.02, 0.005, format="%.3f", help=param_help("duplicate_key_ticket_share_medium"))
+        duplicate_key_high = st.number_input("High duplicate-key ticket share", 0.0, 1.0, 0.10, 0.01, format="%.3f", help=param_help("duplicate_key_ticket_share_high"))
+        max_terminal_tickets = st.number_input("Max tickets per terminal / 30 min", 10, 200, 70, 1, help=param_help("max_terminal_tickets_per_halfhour"))
+        basket_outlier_mad = st.number_input("Basket outlier MAD multiplier", 3.0, 30.0, 10.0, 1.0, help=param_help("basket_outlier_mad_multiplier"))
+        basket_outlier_quantile = st.number_input("Basket outlier network quantile", 0.900, 1.000, 0.999, 0.001, format="%.3f", help=param_help("basket_outlier_network_quantile"))
+        basket_outlier_share = st.number_input("Basket outlier review ticket share", 0.0, 1.0, 0.02, 0.005, format="%.3f", help=param_help("basket_outlier_ticket_share_medium"))
 
         second_min_tickets = st.number_input("Multi-POS: second-strongest POS min tickets", 1, 80, 5, 1, help=param_help("multi_pos_second_min_tickets"))
         second_min_share = st.number_input("Multi-POS: second-strongest POS min share", 0.0, 1.0, 0.30, 0.05, help=param_help("multi_pos_second_min_share"))
@@ -587,6 +725,12 @@ params = Params(
     return_risk=float(return_risk),
     netting_ticket_share_medium=float(netting_medium),
     netting_ticket_share_high=float(netting_high),
+    duplicate_key_ticket_share_medium=float(duplicate_key_medium),
+    duplicate_key_ticket_share_high=float(duplicate_key_high),
+    max_terminal_tickets_per_halfhour=int(max_terminal_tickets),
+    basket_outlier_mad_multiplier=float(basket_outlier_mad),
+    basket_outlier_network_quantile=float(basket_outlier_quantile),
+    basket_outlier_ticket_share_medium=float(basket_outlier_share),
     multi_pos_second_min_tickets=int(second_min_tickets),
     multi_pos_second_min_share=float(second_min_share),
     multi_pos_min_total_tickets=int(multi_min_total),
@@ -643,11 +787,46 @@ def enrich(df: pd.DataFrame, p: Params) -> pd.DataFrame:
     out["positive_tickets"] = np.where(out["is_return"], 0, out["NUMBER_OF_TICKETS"])
     out["return_tickets"] = np.where(out["is_return"], out["NUMBER_OF_TICKETS"], 0)
 
-    # small-basket suitability clean components: suspicious netted rows are not allowed to make baskets look smaller.
+    out["row_items_per_ticket"] = out["positive_items"] / pd.Series(out["positive_tickets"]).replace(0, np.nan)
+
+    # Basket-size outlier safeguard:
+    # - Ticket traffic remains valid unless the row was removed as traffic outlier earlier.
+    # - Extreme items/ticket rows are excluded from basket-size scoring only.
+    clean_ratios = out.loc[out["clean_basket_row"], ["STORE_ID", "row_items_per_ticket"]].dropna()
+    out["basket_size_outlier"] = False
+
+    if not clean_ratios.empty:
+        network_high = clean_ratios["row_items_per_ticket"].quantile(p.basket_outlier_network_quantile)
+        stats = clean_ratios.groupby("STORE_ID")["row_items_per_ticket"].agg(
+            store_median="median",
+            store_count="count",
+        ).reset_index()
+
+        def _mad(x):
+            med = np.nanmedian(x)
+            return np.nanmedian(np.abs(x - med))
+
+        mad = clean_ratios.groupby("STORE_ID")["row_items_per_ticket"].apply(_mad).reset_index(name="store_mad")
+        stats = stats.merge(mad, on="STORE_ID", how="left")
+        out = out.merge(stats, on="STORE_ID", how="left")
+
+        store_threshold = out["store_median"] + p.basket_outlier_mad_multiplier * out["store_mad"]
+        store_threshold = store_threshold.where(out["store_mad"].fillna(0) > 0, np.inf)
+        out["basket_size_outlier"] = (
+            out["clean_basket_row"]
+            & out["row_items_per_ticket"].notna()
+            & (
+                (out["row_items_per_ticket"] > store_threshold)
+                | (out["row_items_per_ticket"] > network_high)
+            )
+        )
+        out = out.drop(columns=["store_median", "store_count", "store_mad"], errors="ignore")
+
+    out["clean_basket_row"] = out["clean_basket_row"] & (~out["basket_size_outlier"])
+
+    # small-basket suitability clean components: suspicious netted rows and basket outliers are not allowed to drive basket scoring.
     out["clean_basket_tickets"] = np.where(out["clean_basket_row"], out["NUMBER_OF_TICKETS"], 0)
     out["clean_basket_items"] = np.where(out["clean_basket_row"], out["NUMBER_OF_ITEMS"], 0)
-
-    out["row_items_per_ticket"] = out["positive_items"] / pd.Series(out["positive_tickets"]).replace(0, np.nan)
 
     out["service_seconds"] = (
         p.fixed_sec * out["NUMBER_OF_TICKETS"]
@@ -658,8 +837,9 @@ def enrich(df: pd.DataFrame, p: Params) -> pd.DataFrame:
         )
     )
 
-    out["core_baseline"] = (out["dow"] < 5) & (~out["date"].isin(CROATIAN_HOLIDAYS))
-    out["saturday_module"] = (out["dow"] == 5) & (~out["date"].isin(CROATIAN_HOLIDAYS))
+    holidays = croatian_public_holidays(out["TIME_BLOCK"].dt.year.dropna().unique())
+    out["core_baseline"] = (out["dow"] < 5) & (~out["date"].isin(holidays))
+    out["saturday_module"] = (out["dow"] == 5) & (~out["date"].isin(holidays))
     return out
 
 
@@ -675,13 +855,24 @@ def store_data_quality(df: pd.DataFrame, mask: pd.Series, p: Params) -> pd.DataF
         netting_tickets = g.loc[g["possible_netting"], "NUMBER_OF_TICKETS"].sum()
         negative_tickets = g.loc[g["is_return"], "NUMBER_OF_TICKETS"].sum()
         zero_tickets = g.loc[g["zero_item_positive_ticket"], "NUMBER_OF_TICKETS"].sum()
+        basket_outlier_tickets = g.loc[g["basket_size_outlier"], "NUMBER_OF_TICKETS"].sum() if "basket_size_outlier" in g.columns else 0
         duplicate_rows = int(g["duplicate_key"].sum())
+        duplicate_key_tickets = g.loc[g["duplicate_key"], "NUMBER_OF_TICKETS"].sum()
 
         netting_share = netting_tickets / total_tickets if total_tickets else np.nan
         negative_share = negative_tickets / total_tickets if total_tickets else np.nan
+        basket_outlier_share = basket_outlier_tickets / total_tickets if total_tickets else np.nan
+        duplicate_key_ticket_share = duplicate_key_tickets / total_tickets if total_tickets else np.nan
 
         flags = []
-        if duplicate_rows > 0:
+        if duplicate_key_ticket_share >= p.duplicate_key_ticket_share_high:
+            flags.append("high duplicate-key aggregation risk")
+            confidence = "Low"
+        elif duplicate_key_ticket_share >= p.duplicate_key_ticket_share_medium:
+            flags.append("medium duplicate-key aggregation risk")
+            if confidence == "High":
+                confidence = "Medium"
+        elif duplicate_rows > 0:
             flags.append("duplicate keys")
         if netting_share >= p.netting_ticket_share_high:
             flags.append("high netting risk")
@@ -698,6 +889,12 @@ def store_data_quality(df: pd.DataFrame, mask: pd.Series, p: Params) -> pd.DataF
             flags.append("zero-item positive-ticket rows")
             if confidence == "High":
                 confidence = "Medium"
+        if basket_outlier_share >= p.basket_outlier_ticket_share_medium:
+            flags.append("basket-size outlier share")
+            if confidence == "High":
+                confidence = "Medium"
+        elif basket_outlier_tickets > 0:
+            flags.append("basket-size outliers excluded")
 
         rows.append({
             "STORE_ID": sid,
@@ -708,8 +905,13 @@ def store_data_quality(df: pd.DataFrame, mask: pd.Series, p: Params) -> pd.DataF
             "possible_netting_ticket_share": netting_share,
             "negative_item_rows": int(g["is_return"].sum()),
             "negative_ticket_share": negative_share,
+            "basket_outlier_rows": int(g["basket_size_outlier"].sum()) if "basket_size_outlier" in g.columns else 0,
+            "basket_outlier_tickets": int(basket_outlier_tickets),
+            "basket_outlier_ticket_share": basket_outlier_share,
             "zero_item_positive_ticket_rows": int(g["zero_item_positive_ticket"].sum()),
             "duplicate_key_rows": duplicate_rows,
+            "duplicate_key_tickets": int(duplicate_key_tickets),
+            "duplicate_key_ticket_share": duplicate_key_ticket_share,
             "data_quality_confidence": confidence,
             "data_quality_flags": "; ".join(flags) if flags else "none",
         })
@@ -1232,7 +1434,7 @@ def display_table(df: pd.DataFrame, *, row_height: int | None = 38, height: int 
 # =============================================================================
 
 try:
-    raw_df = load_transaction_csv(csv_file)
+    raw_df = load_transaction_csv(csv_file, params.max_terminal_tickets_per_halfhour)
 except Exception as exc:
     st.error(str(exc))
     st.stop()
@@ -1405,22 +1607,34 @@ with tabs[2]:
         unsafe_allow_html=True,
     )
 
-    q1, q2, q3, q4, q5 = st.columns(5)
+    q1, q2, q3, q4 = st.columns(4)
     total_rows = len(df[df["core_baseline"]])
     anomaly_rows = int(df[df["core_baseline"]]["possible_netting"].sum())
     neg_rows = int(df[df["core_baseline"]]["is_return"].sum())
+    basket_outlier_rows = int(df[df["core_baseline"]]["basket_size_outlier"].sum()) if "basket_size_outlier" in df.columns else 0
     exact_duplicates_removed = int(raw_df.attrs.get("exact_duplicate_rows_removed", 0))
+    traffic_outlier_blocks_removed = int(raw_df.attrs.get("traffic_outlier_blocks_removed", 0))
+    positive_items_zero_ticket_rows_removed = int(raw_df.attrs.get("positive_items_zero_ticket_rows_removed", 0))
     anomaly_share = anomaly_rows / total_rows if total_rows else np.nan
     negative_share = neg_rows / total_rows if total_rows else np.nan
+    basket_outlier_share = basket_outlier_rows / total_rows if total_rows else np.nan
 
     q1.metric("Core rows", f"{total_rows:,}")
     q2.metric("Exact duplicates removed", f"{exact_duplicates_removed:,}")
-    q3.metric("ITEMS < TICKETS rows", f"{anomaly_rows:,}")
-    q3.caption(f"{pct(anomaly_share)} of core rows")
-    q4.metric("Negative item rows", f"{neg_rows:,}")
-    q4.caption(f"{pct(negative_share)} of core rows")
+    q3.metric("Traffic outlier blocks removed", f"{traffic_outlier_blocks_removed:,}")
+    q4.metric("Low-confidence stores", int((quality_core["data_quality_confidence"] == "Low").sum()))
+
+    st.caption(f"Positive-items / zero-ticket rows removed: {positive_items_zero_ticket_rows_removed:,}")
+
+    q5, q6, q7 = st.columns(3)
+    q5.metric("ITEMS < TICKETS rows", f"{anomaly_rows:,}")
+    q5.caption(f"{pct(anomaly_share)} of core rows")
+    q6.metric("Negative item rows", f"{neg_rows:,}")
+    q6.caption(f"{pct(negative_share)} of core rows")
+    q7.metric("Basket-size outlier rows", f"{basket_outlier_rows:,}")
+    q7.caption(f"{pct(basket_outlier_share)} of core rows; excluded from basket scoring")
+
     low_confidence_stores = quality_core[quality_core["data_quality_confidence"] == "Low"].copy()
-    q5.metric("Low-confidence stores", int(len(low_confidence_stores)))
 
     if not low_confidence_stores.empty:
         low_ids = ", ".join(str(int(x)) for x in sorted(low_confidence_stores["STORE_ID"].tolist()))
@@ -1494,34 +1708,161 @@ with tabs[4]:
     c6.metric("Clean peak basket", fmt(row["sb_rollout_median_items_per_ticket"], 2))
     st.caption(row["store_capacity_estimation_method"])
 
-    smonth = core_monthly[core_monthly["STORE_ID"] == selected_store].sort_values("month")
-    if not smonth.empty:
-        fig = px.bar(
-            smonth,
-            x="month",
-            y="sb_peak_rollout_per100_open_hh",
-            text="sb_peak_rollout_intervals",
-            title="Monthly normalized small-basket peak pressure",
-            labels={"sb_peak_rollout_per100_open_hh": "Peaks / 100 open HH", "month": "Month"},
-        )
-        fig.update_traces(textposition="outside")
-        fig.update_layout(height=420)
-        st.plotly_chart(fig, use_container_width=True)
+    deep_tabs = st.tabs(["Mon–Fri baseline", "Saturday signal"])
 
-    stime = core_time[core_time["STORE_ID"] == selected_store].sort_values("time")
-    if not stime.empty:
-        fig2 = px.line(
-            stime,
-            x="time",
-            y="avg_tickets",
-            markers=True,
-            title="Average POS tickets by half-hour",
-            labels={"avg_tickets": "Average POS tickets", "time": "Half-hour"},
+    with deep_tabs[0]:
+        st.markdown(
+            """
+            <div class="method-box">
+            <b>Mon–Fri baseline:</b> regular weekdays excluding Croatian public holidays. This is the baseline used for the recommendation score.
+            </div>
+            """,
+            unsafe_allow_html=True,
         )
-        fig2.update_layout(height=420, xaxis_tickangle=-90)
-        st.plotly_chart(fig2, use_container_width=True)
 
-    display_table(smonth, row_height=36, height=320)
+        smonth = core_monthly[core_monthly["STORE_ID"] == selected_store].sort_values("month")
+        stime = core_time[core_time["STORE_ID"] == selected_store].sort_values("time")
+
+        if not smonth.empty:
+            fig = px.bar(
+                smonth,
+                x="month",
+                y="sb_peak_rollout_per100_open_hh",
+                text="sb_peak_rollout_intervals",
+                title="Mon–Fri: normalized small-basket peak pressure by month",
+                labels={"sb_peak_rollout_per100_open_hh": "Small-basket peaks / 100 open HH", "month": "Month"},
+            )
+            fig.update_traces(textposition="outside", marker_color="#1B8A3B")
+            fig.update_layout(height=390)
+            st.plotly_chart(fig, use_container_width=True)
+
+        if not stime.empty:
+            profile_cols = [c for c in ["avg_tickets", "median_tickets", "p75_tickets"] if c in stime.columns]
+            profile_long = stime[["time"] + profile_cols].melt(
+                id_vars="time",
+                value_vars=profile_cols,
+                var_name="metric",
+                value_name="tickets",
+            )
+            label_map = {
+                "avg_tickets": "Average POS tickets",
+                "median_tickets": "Median POS tickets",
+                "p75_tickets": "75th percentile POS tickets",
+            }
+            profile_long["metric"] = profile_long["metric"].map(label_map)
+
+            fig2 = px.line(
+                profile_long,
+                x="time",
+                y="tickets",
+                color="metric",
+                markers=True,
+                title="Mon–Fri: POS ticket pressure by half-hour",
+                labels={"tickets": "POS tickets", "time": "Half-hour", "metric": ""},
+                color_discrete_sequence=["#F58220", "#1B8A3B", "#10233F"],
+            )
+            fig2.add_hline(
+                y=params.early_pressure_tickets,
+                line_dash="dash",
+                line_color="#F58220",
+                annotation_text=f"Early pressure threshold: {params.early_pressure_tickets}",
+                annotation_position="top left",
+            )
+            fig2.update_layout(height=420, xaxis_tickangle=-90)
+            st.plotly_chart(fig2, use_container_width=True)
+
+            fig3 = px.bar(
+                stime,
+                x="time",
+                y="sb_peak_rollout_intervals",
+                title="Mon–Fri: small-basket peak intervals by half-hour",
+                labels={"sb_peak_rollout_intervals": "Small-basket peak intervals", "time": "Half-hour"},
+            )
+            fig3.update_traces(marker_color="#1B8A3B")
+            fig3.update_layout(height=360, xaxis_tickangle=-90)
+            st.plotly_chart(fig3, use_container_width=True)
+
+        if not smonth.empty:
+            with st.expander("Show Mon–Fri monthly data table", expanded=False):
+                display_table(smonth, row_height=36, height=320)
+
+    with deep_tabs[1]:
+        st.markdown(
+            """
+            <div class="method-box">
+            <b>Saturday signal:</b> shown for interpretation only. Saturday is not part of the main recommendation score, because weekend shopping patterns can differ from regular weekday operations.
+            </div>
+            """,
+            unsafe_allow_html=True,
+        )
+
+        sat_m = sat_monthly[sat_monthly["STORE_ID"] == selected_store].sort_values("month") if not sat_monthly.empty else pd.DataFrame()
+        sat_t = sat_time[sat_time["STORE_ID"] == selected_store].sort_values("time") if not sat_time.empty else pd.DataFrame()
+
+        if sat_m.empty and sat_t.empty:
+            st.info("No non-holiday Saturday observations for this store in the uploaded dataset.")
+        else:
+            if not sat_m.empty:
+                fig4 = px.bar(
+                    sat_m,
+                    x="month",
+                    y="sb_peak_rollout_per100_open_hh",
+                    text="sb_peak_rollout_intervals",
+                    title="Saturday: normalized small-basket peak pressure by month",
+                    labels={"sb_peak_rollout_per100_open_hh": "Small-basket peaks / 100 open HH", "month": "Month"},
+                )
+                fig4.update_traces(textposition="outside", marker_color="#F58220")
+                fig4.update_layout(height=390)
+                st.plotly_chart(fig4, use_container_width=True)
+
+            if not sat_t.empty:
+                sat_profile_cols = [c for c in ["avg_tickets", "median_tickets", "p75_tickets"] if c in sat_t.columns]
+                sat_profile_long = sat_t[["time"] + sat_profile_cols].melt(
+                    id_vars="time",
+                    value_vars=sat_profile_cols,
+                    var_name="metric",
+                    value_name="tickets",
+                )
+                sat_profile_long["metric"] = sat_profile_long["metric"].map({
+                    "avg_tickets": "Average POS tickets",
+                    "median_tickets": "Median POS tickets",
+                    "p75_tickets": "75th percentile POS tickets",
+                })
+
+                fig5 = px.line(
+                    sat_profile_long,
+                    x="time",
+                    y="tickets",
+                    color="metric",
+                    markers=True,
+                    title="Saturday: POS ticket pressure by half-hour",
+                    labels={"tickets": "POS tickets", "time": "Half-hour", "metric": ""},
+                    color_discrete_sequence=["#F58220", "#1B8A3B", "#10233F"],
+                )
+                fig5.add_hline(
+                    y=params.early_pressure_tickets,
+                    line_dash="dash",
+                    line_color="#F58220",
+                    annotation_text=f"Early pressure threshold: {params.early_pressure_tickets}",
+                    annotation_position="top left",
+                )
+                fig5.update_layout(height=420, xaxis_tickangle=-90)
+                st.plotly_chart(fig5, use_container_width=True)
+
+                fig6 = px.bar(
+                    sat_t,
+                    x="time",
+                    y="sb_peak_rollout_intervals",
+                    title="Saturday: small-basket peak intervals by half-hour",
+                    labels={"sb_peak_rollout_intervals": "Small-basket peak intervals", "time": "Half-hour"},
+                )
+                fig6.update_traces(marker_color="#F58220")
+                fig6.update_layout(height=360, xaxis_tickangle=-90)
+                st.plotly_chart(fig6, use_container_width=True)
+
+            if not sat_m.empty:
+                with st.expander("Show Saturday monthly data table", expanded=False):
+                    display_table(sat_m, row_height=36, height=320)
 
     st.markdown("#### Additional validation needed")
     st.info(
