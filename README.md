@@ -196,3 +196,8 @@ Store deep dive now separates:
 - Saturday signal charts shown for interpretation only
 
 Sundays and Croatian public holidays are not included in the core score or Saturday view.
+
+
+## Mask dtype fix
+
+Traffic-outlier filtering now casts the merge flag to boolean before applying inverse selection. This prevents pandas from interpreting `~False` on object dtype as `-1`.

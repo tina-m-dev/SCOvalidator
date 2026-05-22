@@ -428,7 +428,8 @@ def load_transaction_csv(uploaded_file, max_terminal_tickets_per_halfhour: int =
     if traffic_outlier_blocks_removed:
         marker = traffic_outlier_keys.assign(_traffic_outlier=True)
         df = df.merge(marker, on=key_cols, how="left")
-        outlier_mask = df["_traffic_outlier"].fillna(False)
+        # After merge, True/NaN can become object dtype. Cast explicitly to bool before using ~.
+        outlier_mask = df["_traffic_outlier"].fillna(False).astype(bool)
         traffic_outlier_rows_removed = int(outlier_mask.sum())
         traffic_outlier_tickets_removed = int(df.loc[outlier_mask, "NUMBER_OF_TICKETS"].sum())
         df = df.loc[~outlier_mask].drop(columns=["_traffic_outlier"]).copy()
