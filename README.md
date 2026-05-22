@@ -1,4 +1,4 @@
-# Self-service checkout potential assessment
+# Measurable SCO-suitable pressure assessment
 
 Streamlit app for the Kodiraona / Studenac SCO case.
 
@@ -151,3 +151,23 @@ The Existing SCO table now uses a compact dynamic height so it fits the actual n
 
 Exact duplicate transactional rows are removed before scoring to avoid double-counting the same traffic.
 Duplicate-key rows with the same `STORE_ID + POS + IS_SELF_CHECKOUT + TIME_BLOCK` but different ticket/item values are not removed automatically; they remain aggregated and are flagged as data-quality risk.
+
+
+## V1 scope update
+
+The app is now intentionally limited to V1 evidence from the supplied transaction dataset.
+
+It assesses measurable SCO-suitable pressure using:
+- busy checkout periods
+- small-basket fit
+- time pattern / recurrence
+- staffed POS setup
+- data quality
+- existing SCO usage benchmarks
+
+The app no longer includes:
+- optional store master upload
+- store-format scoring or enrichment
+- payback calculator
+
+These are treated as V2 validation layers for the case-study PDF. With internal Studenac data, V2 should add store format, urban/tourist context, layout feasibility, retail-media potential, CAPEX/OPEX, margin, labor cost, lost-sales estimate and payback logic.

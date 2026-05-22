@@ -13,7 +13,7 @@ import streamlit as st
 # =============================================================================
 
 st.set_page_config(
-    page_title="Self-service checkout potential assessment",
+    page_title="Measurable SCO-suitable pressure assessment",
     page_icon="🧾",
     layout="wide",
 )
@@ -87,28 +87,29 @@ st.markdown(
     unsafe_allow_html=True,
 )
 
-st.title("Self-service checkout potential assessment")
+st.title("Measurable SCO-suitable pressure assessment")
 st.markdown(
     """
     <div class="intro-box">
-      <div class="intro-title">Classifies each store into one of three self-checkout actions.</div>
-      <div class="intro-subtitle">The goal is to identify stores where self-checkout can reduce checkout pressure, fit the customer basket, and make operational sense.</div>
+      <div class="intro-title">Does this store show measurable SCO-suitable pressure?</div>
+      <div class="intro-subtitle">A transaction-based V1 framework for identifying stores with recurring small-basket checkout pressure. Store-format and financial validation are treated as V2 layers, not inferred from the supplied transaction file.</div>
     </div>
 
     <div class="action-grid">
-      <div class="action-card"><b>2 — Rollout / optimize</b><p>Strong fit: repeated busy checkout periods, small baskets, clean data, and workable POS setup.</p></div>
-      <div class="action-card"><b>1 — Pilot / validate</b><p>Potential fit, but field validation, better data confidence, or a payback check is needed.</p></div>
-      <div class="action-card"><b>0 — Defer / diagnose</b><p>Weak fit, or the store problem is not solved by self-service checkout.</p></div>
+      <div class="action-card"><b>2 — Strong V1 signal</b><p>Recurring busy checkout periods, small baskets, clean data, and workable staffed-POS setup.</p></div>
+      <div class="action-card"><b>1 — Validate</b><p>Measurable potential, but field validation, stronger data confidence, or store-format checks are needed.</p></div>
+      <div class="action-card"><b>0 — Defer / diagnose</b><p>Weak SCO-suitable pressure, data contamination, or a staffing/POS issue that should be diagnosed first.</p></div>
     </div>
 
     <div class="criteria-box">
-      <div class="criteria-title">Assessment criteria</div>
+      <div class="criteria-title">V1 assessment criteria from the transaction dataset</div>
       <div class="criteria-chip-row">
         <span class="criteria-chip">Busy checkout periods</span>
-        <span class="criteria-chip">Basket size</span>
-        <span class="criteria-chip">POS setup</span>
+        <span class="criteria-chip">Small-basket fit</span>
+        <span class="criteria-chip">Time pattern</span>
+        <span class="criteria-chip">Staffed POS setup</span>
         <span class="criteria-chip">Data quality</span>
-        <span class="criteria-chip">Payback estimate</span>
+        <span class="criteria-chip">Existing SCO usage</span>
       </div>
     </div>
     """,
@@ -502,23 +503,6 @@ def estimate_store_capacity_by_store(df: pd.DataFrame, p: Params) -> pd.DataFram
 
 
 
-def load_optional_master(uploaded_file) -> Optional[pd.DataFrame]:
-    if uploaded_file is None:
-        return None
-    try:
-        master = pd.read_csv(uploaded_file)
-        if "STORE_ID" not in master.columns:
-            st.warning("Store master ignored: it must contain STORE_ID.")
-            return None
-        master["STORE_ID"] = pd.to_numeric(master["STORE_ID"], errors="coerce").astype("Int64")
-        master = master.dropna(subset=["STORE_ID"])
-        master["STORE_ID"] = master["STORE_ID"].astype(int)
-        return master
-    except Exception as exc:
-        st.warning(f"Store master could not be read: {exc}")
-        return None
-
-
 # =============================================================================
 # Sidebar parameters
 # =============================================================================
@@ -530,12 +514,6 @@ with st.sidebar:
         type=["csv"],
         help="Required input with STORE_ID, POS, IS_SELF_CHECKOUT, TIME_BLOCK, NUMBER_OF_TICKETS, and NUMBER_OF_ITEMS.",
     )
-    master_file = st.file_uploader(
-        "Optional store master CSV",
-        type=["csv"],
-        help="Optional metadata by STORE_ID, such as urban/tourist flag, floor constraints, or retail-media potential. It does not override the blind transaction-based score.",
-    )
-
     st.header("2) Service-time assumptions")
     fixed_sec = st.number_input("Fixed seconds per ticket", 0.0, 180.0, 23.0, 1.0, help=param_help("fixed_sec"))
     scan_sec = st.number_input("Scan seconds per item", 0.0, 30.0, 3.0, 0.5, help=param_help("scan_sec"))
@@ -1260,7 +1238,6 @@ except Exception as exc:
     st.stop()
 
 input_checks = input_validation_summary(raw_df)
-master = load_optional_master(master_file)
 df = enrich(raw_df, params)
 quality_core = store_data_quality(df, df["core_baseline"], params)
 quality_sat = store_data_quality(df, df["saturday_module"], params)
@@ -1280,11 +1257,6 @@ core_metrics = core_metrics.sort_values(
 
 sco_summary, sco_monthly, sco_time = adoption_analysis(df, df["core_baseline"], params, "core_weekday_nonholiday")
 
-if master is not None:
-    core_metrics = core_metrics.merge(master, on="STORE_ID", how="left", suffixes=("", "_master"))
-    if not sco_summary.empty:
-        sco_summary = sco_summary.merge(master, on="STORE_ID", how="left", suffixes=("", "_master"))
-
 # =============================================================================
 # Tabs
 # =============================================================================
@@ -1300,17 +1272,17 @@ tabs = st.tabs([
 ])
 
 with tabs[0]:
-    st.subheader("SCO should be deployed where small-basket peak pressure is recurring, addressable, and not a data artifact")
+    st.subheader("Find stores with measurable SCO-suitable pressure")
     c1, c2, c3, c4 = st.columns(4)
-    c1.metric("Rollout / optimize", int((core_metrics["decision_score"] == 2).sum()))
-    c2.metric("Pilot / validate", int((core_metrics["decision_score"] == 1).sum()))
+    c1.metric("Strong V1 signal", int((core_metrics["decision_score"] == 2).sum()))
+    c2.metric("Validate", int((core_metrics["decision_score"] == 1).sum()))
     c3.metric("Defer / diagnose", int((core_metrics["decision_score"] == 0).sum()))
     c4.metric("Existing SCO stores", int(raw_df.loc[raw_df["IS_SELF_CHECKOUT"].astype(bool), "STORE_ID"].nunique()))
 
     st.markdown(
         """
         <div class="method-box">
-        <b>Decision logic:</b> The app looks for stores with repeated busy checkout periods and small baskets.
+        <b>Decision logic:</b> The app looks for stores with repeated busy checkout periods and small baskets using only the supplied transaction data.
         Rows that may include returns or corrections are counted as traffic, but they are excluded from basket scoring.
         Extra staffed POS terminals are checked separately to decide whether they should stay, be replaced by self-checkout, or be repurposed.
         </div>
@@ -1563,103 +1535,11 @@ with tabs[4]:
 
     display_table(smonth, row_height=36, height=320)
 
-    st.markdown("#### Payback estimate for this store")
-    with st.expander("Edit financial assumptions", expanded=False):
-        p1, p2, p3 = st.columns(3)
-        with p1:
-            store_investment = st.number_input(
-                "Initial SCO investment (€)",
-                min_value=0.0,
-                value=9000.0,
-                step=500.0,
-                key="store_payback_investment",
-                help="Initial cost of one self-checkout deployment: hardware, setup, integration, and layout work.",
-            )
-            store_fixed_cost = st.number_input(
-                "Annual maintenance/support (€)",
-                min_value=0.0,
-                value=1200.0,
-                step=100.0,
-                key="store_payback_fixed_cost",
-                help="Annual support, maintenance, service, and similar recurring costs.",
-            )
-        with p2:
-            store_avg_ticket = st.number_input(
-                "Average ticket value (€)",
-                min_value=0.0,
-                value=7.5,
-                step=0.5,
-                key="store_payback_avg_ticket",
-                help="Average basket value in euros. Used to estimate protected gross-margin contribution.",
-            )
-            store_margin = st.number_input(
-                "Gross margin",
-                min_value=0.0,
-                max_value=1.0,
-                value=0.25,
-                step=0.01,
-                key="store_payback_margin",
-                help="Gross margin rate. Example: 0.25 means 25%.",
-            )
-        with p3:
-            store_lost_ticket = st.number_input(
-                "Avoided lost-ticket factor",
-                min_value=0.0,
-                max_value=1.0,
-                value=0.03,
-                step=0.01,
-                key="store_payback_lost_ticket",
-                help="Scenario assumption for the share of peak tickets that self-checkout could help protect.",
-            )
-            store_labor_cost = st.number_input(
-                "Fully loaded labor cost €/hour",
-                min_value=0.0,
-                value=8.5,
-                step=0.5,
-                key="store_payback_labor_cost",
-                help="Hourly labor cost including employer costs.",
-            )
-            store_redeployment = st.number_input(
-                "Labor redeployment realization",
-                min_value=0.0,
-                max_value=1.0,
-                value=0.50,
-                step=0.05,
-                key="store_payback_redeployment",
-                help="Share of released checkout time that can realistically create value elsewhere in the store.",
-            )
-
-    basket_for_payback = row["sb_rollout_median_items_per_ticket"]
-    if pd.isna(basket_for_payback):
-        basket_for_payback = row["hp_median_clean_items_per_ticket"]
-    if pd.isna(basket_for_payback):
-        basket_for_payback = row["store_capacity_basket_items"]
-
-    seconds_per_ticket = params.fixed_sec + params.scan_sec * basket_for_payback
-    addressed_peak_tickets = row["sb_peak_rollout_intervals"] * params.early_pressure_tickets
-    annual_congestion_value = addressed_peak_tickets * store_lost_ticket * store_avg_ticket * store_margin
-    released_hours = addressed_peak_tickets * seconds_per_ticket / 3600
-    annual_labor_value = released_hours * store_labor_cost * store_redeployment
-    annual_net_benefit = annual_congestion_value + annual_labor_value - store_fixed_cost
-    payback_months = store_investment / annual_net_benefit * 12 if annual_net_benefit > 0 else np.nan
-
-    if pd.isna(payback_months):
-        payback_class = "No positive payback"
-    elif payback_months <= 18:
-        payback_class = "Pass"
-    elif payback_months <= 36:
-        payback_class = "Borderline"
-    else:
-        payback_class = "Fail"
-
-    pb1, pb2, pb3, pb4, pb5 = st.columns(5)
-    pb1.metric("Congestion value / year", f"€{annual_congestion_value:,.0f}")
-    pb2.metric("Labor value / year", f"€{annual_labor_value:,.0f}")
-    pb3.metric("Net benefit / year", f"€{annual_net_benefit:,.0f}")
-    pb4.metric("Payback", "-" if pd.isna(payback_months) else f"{payback_months:,.1f} months")
-    pb5.metric("Financial check", payback_class)
-
-    st.caption("This is a scenario estimate for the selected store, not a financial forecast. The store recommendation is based on operational fit; this section checks whether the financial assumptions support the case.")
+    st.markdown("#### V2 validation note")
+    st.info(
+        "This app intentionally stops at V1: measurable SCO-suitable pressure from the transaction dataset. "
+        "Store-format fit, layout feasibility, retail-media upside, CAPEX/OPEX, margin, labor cost and payback should be added as V2 validation layers using Studenac internal data."
+    )
 
 with tabs[5]:
     st.subheader("Existing SCO adoption benchmarks")
@@ -1717,9 +1597,3 @@ with tabs[6]:
     with d4:
         download_df_button(core_hh, "Half-hour diagnostic CSV", "sco_halfhour_diagnostic.csv")
     download_df_button(capacity_by_store, "Store-specific capacity estimates CSV", "sco_store_capacity_estimates.csv")
-
-    if master is None:
-        st.info("No store master uploaded. Urbanity, tourist format, floor space, retail-media potential, and local competition are not used in the blind score.")
-    else:
-        st.success("Store master loaded. Metadata is merged into output tables but does not override the blind transaction-based score.")
-        display_table(master.head(20), row_height=38, height=360)
