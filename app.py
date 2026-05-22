@@ -92,17 +92,17 @@ st.markdown(
     """
     <div class="intro-box">
       <div class="intro-title">Does this store show measurable SCO-suitable pressure?</div>
-      <div class="intro-subtitle">A transaction-based V1 framework for identifying stores with recurring small-basket checkout pressure. Store-format and financial validation are treated as V2 layers, not inferred from the supplied transaction file.</div>
+      <div class="intro-subtitle">A transaction-based framework for identifying stores with recurring small-basket checkout pressure. Store-format and financial validation are not inferred from the supplied transaction file.</div>
     </div>
 
     <div class="action-grid">
-      <div class="action-card"><b>2 — Strong V1 signal</b><p>Recurring busy checkout periods, small baskets, clean data, and workable staffed-POS setup.</p></div>
+      <div class="action-card"><b>2 — Strong signal</b><p>Recurring busy checkout periods, small baskets, clean data, and workable staffed-POS setup.</p></div>
       <div class="action-card"><b>1 — Validate</b><p>Measurable potential, but field validation, stronger data confidence, or store-format checks are needed.</p></div>
       <div class="action-card"><b>0 — Defer / diagnose</b><p>Weak SCO-suitable pressure, data contamination, or a staffing/POS issue that should be diagnosed first.</p></div>
     </div>
 
     <div class="criteria-box">
-      <div class="criteria-title">V1 assessment criteria from the transaction dataset</div>
+      <div class="criteria-title">Assessment criteria from the transaction dataset</div>
       <div class="criteria-chip-row">
         <span class="criteria-chip">Busy checkout periods</span>
         <span class="criteria-chip">Small-basket fit</span>
@@ -1274,7 +1274,7 @@ tabs = st.tabs([
 with tabs[0]:
     st.subheader("Find stores with measurable SCO-suitable pressure")
     c1, c2, c3, c4 = st.columns(4)
-    c1.metric("Strong V1 signal", int((core_metrics["decision_score"] == 2).sum()))
+    c1.metric("Strong signal", int((core_metrics["decision_score"] == 2).sum()))
     c2.metric("Validate", int((core_metrics["decision_score"] == 1).sum()))
     c3.metric("Defer / diagnose", int((core_metrics["decision_score"] == 0).sum()))
     c4.metric("Existing SCO stores", int(raw_df.loc[raw_df["IS_SELF_CHECKOUT"].astype(bool), "STORE_ID"].nunique()))
@@ -1423,22 +1423,10 @@ with tabs[2]:
     q5.metric("Low-confidence stores", int(len(low_confidence_stores)))
 
     if not low_confidence_stores.empty:
+        low_ids = ", ".join(str(int(x)) for x in sorted(low_confidence_stores["STORE_ID"].tolist()))
         st.markdown("#### Low-confidence stores")
-        st.caption("These stores are not clean rollout candidates until the data-quality issue is understood.")
-        low_cols = [
-            "STORE_ID",
-            "data_quality_confidence",
-            "data_quality_flags",
-            "possible_netting_ticket_share",
-            "negative_ticket_share",
-            "duplicate_key_rows",
-        ]
-        display_table(
-            low_confidence_stores[[c for c in low_cols if c in low_confidence_stores.columns]]
-            .sort_values(["possible_netting_ticket_share", "negative_ticket_share"], ascending=[False, False]),
-            row_height=42,
-            height=180,
-        )
+        st.warning(f"Store ID(s): {low_ids}")
+        st.caption("These stores are not clean rollout candidates until the data-quality issue is understood. Details are available in the store-level data-quality table below and in Store deep dive.")
     else:
         st.success("No low-confidence stores in the core baseline.")
 
@@ -1535,10 +1523,10 @@ with tabs[4]:
 
     display_table(smonth, row_height=36, height=320)
 
-    st.markdown("#### V2 validation note")
+    st.markdown("#### Additional validation needed")
     st.info(
-        "This app intentionally stops at V1: measurable SCO-suitable pressure from the transaction dataset. "
-        "Store-format fit, layout feasibility, retail-media upside, CAPEX/OPEX, margin, labor cost and payback should be added as V2 validation layers using Studenac internal data."
+        "This app focuses on measurable SCO-suitable pressure from the transaction dataset. "
+        "Before final deployment, Studenac should validate store-format fit, layout feasibility, retail-media upside, CAPEX/OPEX, margin, labor cost and payback using internal data."
     )
 
 with tabs[5]:

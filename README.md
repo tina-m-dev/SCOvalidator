@@ -153,9 +153,9 @@ Exact duplicate transactional rows are removed before scoring to avoid double-co
 Duplicate-key rows with the same `STORE_ID + POS + IS_SELF_CHECKOUT + TIME_BLOCK` but different ticket/item values are not removed automatically; they remain aggregated and are flagged as data-quality risk.
 
 
-## V1 scope update
+## App scope
 
-The app is now intentionally limited to V1 evidence from the supplied transaction dataset.
+The app is intentionally limited to measurable evidence from the supplied transaction dataset.
 
 It assesses measurable SCO-suitable pressure using:
 - busy checkout periods
@@ -170,4 +170,4 @@ The app no longer includes:
 - store-format scoring or enrichment
 - payback calculator
 
-These are treated as V2 validation layers for the case-study PDF. With internal Studenac data, V2 should add store format, urban/tourist context, layout feasibility, retail-media potential, CAPEX/OPEX, margin, labor cost, lost-sales estimate and payback logic.
+These are treated as additional validation layers for the case-study PDF. With internal Studenac data, A future production version should add store format, urban/tourist context, layout feasibility, retail-media potential, CAPEX/OPEX, margin, labor cost, lost-sales estimate and payback logic.
