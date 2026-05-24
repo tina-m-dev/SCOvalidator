@@ -9,6 +9,16 @@ import plotly.express as px
 import streamlit as st
 
 # =============================================================================
+# Brand colors used across charts
+# =============================================================================
+
+BRAND_ORANGE = "#F58220"
+BRAND_GREEN = "#1B8A3B"
+BRAND_NAVY = "#10233F"
+BRAND_GREY = "#A9B0BA"
+BRAND_RED = "#7A1E12"
+
+# =============================================================================
 # Page setup
 # =============================================================================
 
@@ -844,6 +854,12 @@ def enrich(df: pd.DataFrame, p: Params) -> pd.DataFrame:
     return out
 
 
+def lower_confidence(current: str, new: str) -> str:
+    """Return the lower of two ordered confidence levels."""
+    order = {"Low": 1, "Medium": 2, "High": 3}
+    return new if order[new] < order[current] else current
+
+
 def store_data_quality(df: pd.DataFrame, mask: pd.Series, p: Params) -> pd.DataFrame:
     b = df[mask].copy()
     rows = []
@@ -866,34 +882,38 @@ def store_data_quality(df: pd.DataFrame, mask: pd.Series, p: Params) -> pd.DataF
         duplicate_key_ticket_share = duplicate_key_tickets / total_tickets if total_tickets else np.nan
 
         flags = []
+        confidence = "High"
+
         if duplicate_key_ticket_share >= p.duplicate_key_ticket_share_high:
             flags.append("high duplicate-key aggregation risk")
-            confidence = "Low"
+            confidence = lower_confidence(confidence, "Low")
         elif duplicate_key_ticket_share >= p.duplicate_key_ticket_share_medium:
             flags.append("medium duplicate-key aggregation risk")
-            if confidence == "High":
-                confidence = "Medium"
+            confidence = lower_confidence(confidence, "Medium")
         elif duplicate_rows > 0:
             flags.append("duplicate keys")
+
         if netting_share >= p.netting_ticket_share_high:
             flags.append("high netting risk")
-            confidence = "Low"
+            confidence = lower_confidence(confidence, "Low")
         elif netting_share >= p.netting_ticket_share_medium:
             flags.append("medium netting risk")
-            confidence = "Medium"
-        else:
-            confidence = "High"
+            confidence = lower_confidence(confidence, "Medium")
+
         if negative_share >= p.return_risk:
             flags.append("high return/correction share")
-            confidence = "Low"
+            confidence = lower_confidence(confidence, "Low")
+        elif negative_share > p.return_low:
+            flags.append("elevated return/correction share")
+            confidence = lower_confidence(confidence, "Medium")
+
         if zero_tickets > 0:
             flags.append("zero-item positive-ticket rows")
-            if confidence == "High":
-                confidence = "Medium"
+            confidence = lower_confidence(confidence, "Medium")
+
         if basket_outlier_share >= p.basket_outlier_ticket_share_medium:
             flags.append("basket-size outlier share")
-            if confidence == "High":
-                confidence = "Medium"
+            confidence = lower_confidence(confidence, "Medium")
         elif basket_outlier_tickets > 0:
             flags.append("basket-size outliers excluded")
 
@@ -1733,7 +1753,7 @@ with tabs[4]:
                 title="Mon–Fri: normalized small-basket peak pressure by month",
                 labels={"sb_peak_rollout_per100_open_hh": "Small-basket peaks / 100 open HH", "month": "Month"},
             )
-            fig.update_traces(textposition="outside", marker_color="#1B8A3B")
+            fig.update_traces(textposition="outside", marker_color=BRAND_GREEN)
             fig.update_layout(height=390)
             st.plotly_chart(fig, use_container_width=True)
 
@@ -1760,12 +1780,12 @@ with tabs[4]:
                 markers=True,
                 title="Mon–Fri: POS ticket pressure by half-hour",
                 labels={"tickets": "POS tickets", "time": "Half-hour", "metric": ""},
-                color_discrete_sequence=["#F58220", "#1B8A3B", "#10233F"],
+                color_discrete_sequence=[BRAND_ORANGE, BRAND_GREEN, BRAND_NAVY],
             )
             fig2.add_hline(
                 y=params.early_pressure_tickets,
                 line_dash="dash",
-                line_color="#F58220",
+                line_color=BRAND_ORANGE,
                 annotation_text=f"Early pressure threshold: {params.early_pressure_tickets}",
                 annotation_position="top left",
             )
@@ -1779,7 +1799,7 @@ with tabs[4]:
                 title="Mon–Fri: small-basket peak intervals by half-hour",
                 labels={"sb_peak_rollout_intervals": "Small-basket peak intervals", "time": "Half-hour"},
             )
-            fig3.update_traces(marker_color="#1B8A3B")
+            fig3.update_traces(marker_color=BRAND_GREEN)
             fig3.update_layout(height=360, xaxis_tickangle=-90)
             st.plotly_chart(fig3, use_container_width=True)
 
@@ -1812,7 +1832,7 @@ with tabs[4]:
                     title="Saturday: normalized small-basket peak pressure by month",
                     labels={"sb_peak_rollout_per100_open_hh": "Small-basket peaks / 100 open HH", "month": "Month"},
                 )
-                fig4.update_traces(textposition="outside", marker_color="#F58220")
+                fig4.update_traces(textposition="outside", marker_color=BRAND_ORANGE)
                 fig4.update_layout(height=390)
                 st.plotly_chart(fig4, use_container_width=True)
 
@@ -1838,12 +1858,12 @@ with tabs[4]:
                     markers=True,
                     title="Saturday: POS ticket pressure by half-hour",
                     labels={"tickets": "POS tickets", "time": "Half-hour", "metric": ""},
-                    color_discrete_sequence=["#F58220", "#1B8A3B", "#10233F"],
+                    color_discrete_sequence=[BRAND_ORANGE, BRAND_GREEN, BRAND_NAVY],
                 )
                 fig5.add_hline(
                     y=params.early_pressure_tickets,
                     line_dash="dash",
-                    line_color="#F58220",
+                    line_color=BRAND_ORANGE,
                     annotation_text=f"Early pressure threshold: {params.early_pressure_tickets}",
                     annotation_position="top left",
                 )
@@ -1857,7 +1877,7 @@ with tabs[4]:
                     title="Saturday: small-basket peak intervals by half-hour",
                     labels={"sb_peak_rollout_intervals": "Small-basket peak intervals", "time": "Half-hour"},
                 )
-                fig6.update_traces(marker_color="#F58220")
+                fig6.update_traces(marker_color=BRAND_ORANGE)
                 fig6.update_layout(height=360, xaxis_tickangle=-90)
                 st.plotly_chart(fig6, use_container_width=True)
 
@@ -1895,15 +1915,26 @@ with tabs[5]:
             unsafe_allow_html=True,
         )
 
+        sco_plot = sco_summary.copy()
+        sco_plot["review_status"] = np.where(
+            sco_plot["review_flags"].astype(str).str.strip().eq("none"),
+            "No review flags",
+            "Review needed",
+        )
         fig = px.scatter(
-            sco_summary,
+            sco_plot,
             x="sco_ticket_share",
             y="basket_gap_pos_minus_sco",
             size="high_pressure_total_intervals",
-            color="review_flags",
-            hover_data=["STORE_ID", "pos_items_per_ticket_clean", "sco_items_per_ticket_clean", "sco_share_high_pressure", "adoption_lift_in_peak"],
+            color="review_status",
+            color_discrete_map={"No review flags": BRAND_GREEN, "Review needed": BRAND_ORANGE},
+            hover_data=["STORE_ID", "review_flags", "pos_items_per_ticket_clean", "sco_items_per_ticket_clean", "sco_share_high_pressure", "adoption_lift_in_peak"],
             title="Existing-SCO benchmark: adoption vs clean basket separation",
-            labels={"sco_ticket_share": "SCO share of tickets", "basket_gap_pos_minus_sco": "POS items/ticket − SCO items/ticket"},
+            labels={
+                "sco_ticket_share": "SCO share of tickets",
+                "basket_gap_pos_minus_sco": "POS items/ticket − SCO items/ticket",
+                "review_status": "Review status",
+            },
         )
         fig.update_layout(height=500)
         st.plotly_chart(fig, use_container_width=True)
