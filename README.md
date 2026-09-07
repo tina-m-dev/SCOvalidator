@@ -1,5 +1,6 @@
-[![Open App](https://img.shields.io/badge/Otvori-Aplikaciju-blue?style=for-the-badge)](https://scovalidator-ytx8spadpu26ecc5jxexjf.streamlit.app/)
-
+<a href="https://scovalidator-ytx8spadpu26ecc5jxexjf.streamlit.app/" style="display:inline-block; padding:12px 24px; background-color:#000000; color:#ffffff; font-weight:bold; text-decoration:none; border-radius:6px;">
+  Otvori Aplikaciju
+</a>
 
 # SCO Opportunity Screening App
 
