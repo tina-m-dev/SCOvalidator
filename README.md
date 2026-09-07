@@ -1,3 +1,6 @@
+[![Open App](https://img.shields.io/badge/Otvori-Aplikaciju-blue?style=for-the-badge)](https://scovalidator-ytx8spadpu26ecc5jxexjf.streamlit.app/)
+
+
 # SCO Opportunity Screening App
 
 Interactive Streamlit app for screening store-level self-checkout (SCO) opportunities using half-hour transaction data.
