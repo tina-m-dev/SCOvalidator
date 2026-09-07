@@ -1,5 +1,5 @@
 <a href="https://scovalidator-ytx8spadpu26ecc5jxexjf.streamlit.app/" style="display:inline-block; padding:12px 24px; background-color:#000000; color:#ffffff; font-weight:bold; text-decoration:none; border-radius:6px;">
-  Otvori Aplikaciju
+  Oppen Application
 </a>
 
 # SCO Opportunity Screening App
